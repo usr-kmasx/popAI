@@ -1,0 +1,27 @@
+{
+  "backend": {
+    "repository": "https://github.com/ggml-org/llama.cpp",
+    "revision": "2d8a32502909ca065c41c4cf5f2fb1c427c047fc",
+    "url": "https://codeload.github.com/ggml-org/llama.cpp/tar.gz/2d8a32502909ca065c41c4cf5f2fb1c427c047fc",
+    "sha256": "7befec5f2a7fbd7fc69b69e4f80c9824a64cb760cd1b18aa0e1a6b1af53de7d8",
+    "directory": "backends/llama-cpu",
+    "cpu_only": true
+  },
+  "model": {
+    "repository": "https://huggingface.co/AtomicChat/LFM3-1.7B-Uncensored-GGUF",
+    "revision": "3ad712542eb9de349dbd28f2739b69c925cdec7d",
+    "filename": "LFM3-1.7B-Uncensored-AD-Q4_K_M.gguf",
+    "directory": "models/prompt-enhancer",
+    "size": 1132208000,
+    "sha256": "b22df65673b54ed326f18f74826d76f3b65dadc237ffd6306cd52be04544827d",
+    "url": "https://huggingface.co/AtomicChat/LFM3-1.7B-Uncensored-GGUF/resolve/3ad712542eb9de349dbd28f2739b69c925cdec7d/LFM3-1.7B-Uncensored-AD-Q4_K_M.gguf",
+    "license_url": "https://huggingface.co/AtomicChat/LFM3-1.7B-Uncensored-GGUF/resolve/3ad712542eb9de349dbd28f2739b69c925cdec7d/LICENSE"
+  },
+  "runtime": {
+    "gpu_layers": 0,
+    "context": 2048,
+    "reasoning": "off",
+    "port": 8081,
+    "threads": 4
+  }
+}

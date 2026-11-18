@@ -1,0 +1,18 @@
+diff --git a/examples/server/main.cpp b/examples/server/main.cpp
+index 391a1ec..619e380 100644
+--- a/examples/server/main.cpp
++++ b/examples/server/main.cpp
+@@ -137,6 +137,13 @@ int main(int argc, const char** argv) {
+     httplib::Server svr;
+ 
+     svr.set_pre_routing_handler([](const httplib::Request& req, httplib::Response& res) {
++        const char* internal_token = std::getenv("POP_AI_INTERNAL_TOKEN");
++        if (internal_token && (!req.get_header_value("Origin").empty() ||
++                               req.get_header_value("X-PopAI-Token") != internal_token)) {
++            res.status = 403;
++            res.set_content("{\"error\":\"private backend\"}", "application/json");
++            return httplib::Server::HandlerResponse::Handled;
++        }
+         std::string origin = req.get_header_value("Origin");
+         if (origin.empty()) {
+             origin = "*";

@@ -1,0 +1,291 @@
+{
+  "backend": {
+    "repository": "https://github.com/leejet/stable-diffusion.cpp",
+    "revision": "532d2c15c430a785a712b2d94281f04e733008a4",
+    "local_patches": [
+      {
+        "file": "patches/esrgan-pixel-unshuffle.patch",
+        "sha256": "ea84cfa7dec4298635162762f1822e8c5b0f3c633647491f58045ddafe5b440b"
+      },
+      {
+        "file": "patches/private-resident-server.patch",
+        "sha256": "8f77aeddd526bbbd8dc1e8a67b0755d7e6117fb8434c0afddabfe56bae1ab146"
+      },
+      {
+        "file": "patches/esrgan-server-probe.patch",
+        "sha256": "d09b4a649e3662ebdfa866abe4833c0379506acc8119cd15b851c6c708b521cb"
+      }
+    ]
+  },
+  "ggml": {
+    "revision": "eeda9ec48fc84a3df0bb9dcc19ae9053075a2539"
+  },
+  "model": {
+    "name": "FLUX.2 Klein 4B",
+    "variant": "distilled 4-step, Q8_0",
+    "directory": "/run/media/usr/dados/Models/IMG/FLUX.2-klein-4B-GGUF",
+    "components": {
+      "diffusion": {
+        "file": "flux-2-klein-4b-Q8_0.gguf",
+        "size": 4300644928,
+        "sha256": "24a812e8f9b640e21c784164ea48571d8017ca22873696f4badeeabb006d509c",
+        "revision": "a09d5bb51ac4000ccd9643d10e9db3ed14200508",
+        "repository": "https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF",
+        "remote_file": "flux-2-klein-4b-Q8_0.gguf",
+        "storage": "downloaded to user SSD; size and SHA-256 verified"
+      },
+      "text_encoder": {
+        "repository": "https://huggingface.co/unsloth/Qwen3-4B-GGUF",
+        "revision": "22c9fc8a8c7700b76a1789366280a6a5a1ad1120",
+        "remote_file": "Qwen3-4B-Q4_K_M.gguf",
+        "file": "Qwen3-4B-Q4_K_M.gguf",
+        "size": 2497281312,
+        "sha256": "f6f851777709861056efcdad3af01da38b31223a3ba26e61a4f8bf3a2195813a",
+        "storage": "downloaded to user SSD; size and SHA-256 verified"
+      },
+      "vae": {
+        "repository": "https://huggingface.co/Comfy-Org/Flux-2-Klein-4B",
+        "revision": "5b3abca5c0dc1ecd4eaf3340868d09063fc1c965",
+        "remote_file": "split_files/vae/flux2-vae.safetensors",
+        "file": "flux2-vae.safetensors",
+        "size": 336211292,
+        "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3",
+        "storage": "downloaded to user SSD; size and SHA-256 verified"
+      }
+    },
+    "repository": "https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF",
+    "revision": "a09d5bb51ac4000ccd9643d10e9db3ed14200508"
+  },
+  "tools": {
+    "spirv-headers.tar.gz": {
+      "sha256": "2c7e2a8b87d18458577aedc7e98929b9554af89339df1b87437143a05d6b6d35",
+      "size": 596349,
+      "url": "https://github.com/KhronosGroup/SPIRV-Headers/archive/refs/heads/main.tar.gz"
+    },
+    "vulkan-headers.tar.gz": {
+      "sha256": "cbaf687d3c59b9666fe080e7f8396b6b4f4d344a768ee6b337c59852f4526b68",
+      "size": 3416157,
+      "url": "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.363.tar.gz"
+    },
+    "cmake-4.5.0-linux-x86_64.tar.gz": {
+      "sha256": "81f0d5b0960fb6adc8197030ffc827fba937640d51e73e39e0e9e40d88c66f6f",
+      "size": 67002501,
+      "url": "https://github.com/Kitware/CMake/releases/download/v4.5.0/cmake-4.5.0-linux-x86_64.tar.gz"
+    }
+  },
+  "previous_model": {
+    "repository": "https://huggingface.co/Lykon/DreamShaper",
+    "revision": "228d79cb20811466f5c5710aa91f05dabd0b8a14",
+    "file": "DreamShaper_8_pruned.safetensors",
+    "sha256": "879db523c30d3b9017143d56705015e15a2cb5628762c11d086fed9538abd7fd",
+    "size": 2132625894,
+    "installed": false,
+    "removed": "2026-11-17"
+  },
+  "previous_qwen_model": {
+    "name": "Qwen Image 2.1",
+    "variant": "normal (non-Turbo), identified by generator SHA-256",
+    "repository": "https://huggingface.co/unsloth/Qwen-Image-2.1-GGUF",
+    "directory": "/run/media/usr/dados/Models/IMG/Qwen-Image-2.1-Turbo-Quantized",
+    "components": {
+      "diffusion": {
+        "file": "qwen-image-2.1-Q4_K_M.gguf",
+        "size": 4199565024,
+        "storage": "existing file on user SSD; not copied",
+        "sha256": "631d532e7ca71e8d90a87c71d3699761a812039d22e3370e87498d87754660fe"
+      },
+      "text_encoder": {
+        "file": "qwen3-vl-8b-instruct-q4_k_m.gguf",
+        "size": 5027784896,
+        "storage": "existing file on user SSD; not copied"
+      },
+      "vae": {
+        "file": "qwen_image_2.1_vae_bf16.safetensors",
+        "size": 675509688,
+        "storage": "existing file on user SSD; not copied"
+      }
+    }
+  },
+  "model_history": [
+    {
+      "name": "Qwen Image 2.1 Turbo",
+      "variant": "Turbo Q4_K_M",
+      "repository": "https://huggingface.co/unsloth/Qwen-Image-2.1-Turbo-GGUF",
+      "revision": "bd53e520a64472adaff780da0b2f2d7eb1605e30",
+      "directory": "/run/media/usr/dados/Models/IMG/Qwen-Image-2.1-Turbo-Quantized",
+      "components": {
+        "diffusion": {
+          "file": "qwen-image-2.1-turbo-Q4_K_M.gguf",
+          "size": 4199565120,
+          "sha256": "8940e8b522af886e0c0f5afddf720e82dd223cb9a43580b5f61c4d740452ac20",
+          "storage": "downloaded to user SSD; existing normal model preserved"
+        },
+        "text_encoder": {
+          "file": "qwen3-vl-8b-instruct-q4_k_m.gguf",
+          "size": 5027784896,
+          "storage": "existing file on user SSD; not copied"
+        },
+        "vae": {
+          "file": "qwen_image_2.1_vae_bf16.safetensors",
+          "size": 675509688,
+          "storage": "existing file on user SSD; not copied"
+        }
+      }
+    },
+    {
+      "name": "FLUX.2 Klein 4B",
+      "variant": "distilled 4-step, Q4_K_M",
+      "directory": "/run/media/usr/dados/Models/IMG/FLUX.2-klein-4B-GGUF",
+      "components": {
+        "diffusion": {
+          "repository": "https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF",
+          "revision": "a09d5bb51ac4000ccd9643d10e9db3ed14200508",
+          "remote_file": "flux-2-klein-4b-Q4_K_M.gguf",
+          "file": "flux-2-klein-4b-Q4_K_M.gguf",
+          "size": 2604311104,
+          "sha256": "0b25d143c8469b342bc5af3bce92b783bf6b0636d285f7b2f75e38af63af9a15",
+          "storage": "downloaded to user SSD; size and SHA-256 verified"
+        },
+        "text_encoder": {
+          "repository": "https://huggingface.co/unsloth/Qwen3-4B-GGUF",
+          "revision": "22c9fc8a8c7700b76a1789366280a6a5a1ad1120",
+          "remote_file": "Qwen3-4B-Q4_K_M.gguf",
+          "file": "Qwen3-4B-Q4_K_M.gguf",
+          "size": 2497281312,
+          "sha256": "f6f851777709861056efcdad3af01da38b31223a3ba26e61a4f8bf3a2195813a",
+          "storage": "downloaded to user SSD; size and SHA-256 verified"
+        },
+        "vae": {
+          "repository": "https://huggingface.co/Comfy-Org/Flux-2-Klein-4B",
+          "revision": "5b3abca5c0dc1ecd4eaf3340868d09063fc1c965",
+          "remote_file": "split_files/vae/flux2-vae.safetensors",
+          "file": "flux2-vae.safetensors",
+          "size": 336211292,
+          "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3",
+          "storage": "downloaded to user SSD; size and SHA-256 verified"
+        }
+      },
+      "repository": "https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF",
+      "revision": "a09d5bb51ac4000ccd9643d10e9db3ed14200508"
+    }
+  ],
+  "upscaler": {
+    "name": "Real-ESRGAN x4plus (NCNN)",
+    "executor": "upscayl-bin 20240601-103425",
+    "two_pass_runner": {
+      "file": "backends/upscayl-ncnn/upscayl-chain",
+      "repository": "https://github.com/upscayl/upscayl-ncnn",
+      "revision": "22774bc42e2bc3c785b5b585d213d960b1348ad5",
+      "patch": "patches/upscayl-two-pass.patch",
+      "patch_sha256": "8a57abca8b781749190c7effa7481bcbf60f06ac00f581232b95092caefd238a",
+      "build": "tools/build-upscayl.sh"
+    },
+    "model_scale": 4,
+    "files": [
+      {
+        "file": "backends/upscayl-ncnn/models/realesrgan-x4plus.bin",
+        "size": 33424520,
+        "sha256": "713ee713b0353afaa27976f0563a64a5043bd70b9bd8936c2e26e25ebcdbcddf"
+      },
+      {
+        "file": "backends/upscayl-ncnn/models/realesrgan-x4plus.param",
+        "size": 116029,
+        "sha256": "35330ececcea33b6c397a72548e788d5d53becee4734c50b7fada36e89f10a86"
+      },
+      {
+        "file": "backends/upscayl-ncnn/upscayl-bin",
+        "size": 11628504,
+        "sha256": "a7aad1d831d1130762101be3cba8cefe2ceb2d1d010cce4d876cfc022226dab4"
+      }
+    ],
+    "packages": [
+      {
+        "url": "https://github.com/upscayl/upscayl-ncnn/releases/download/20240601-103425/upscayl-bin-20240601-103425-linux.zip",
+        "sha256": "6dad58da39547d64753470ef5a24c4094ce1085b9cb81dabf7e44bd3b7a807a4"
+      },
+      {
+        "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-ubuntu.zip",
+        "sha256": "e5aa6eb131234b87c0c51f82b89390f5e3e642b7b70f2b9bbe95b6a285a40c96"
+      }
+    ]
+  },
+  "pipeline": {
+    "generation": [
+      960,
+      544
+    ],
+    "upscaling": "Real-ESRGAN x4plus via upscayl-bin NCNN/Vulkan, native 4x then resize to 1920x1088",
+    "upscaled": [
+      1920,
+      1088
+    ],
+    "export": [
+      1920,
+      1080
+    ],
+    "crop_top_bottom": 4,
+    "native_upscaled": [
+      3840,
+      2176
+    ]
+  },
+  "qwen_vision": {
+    "repository": "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF",
+    "revision": "f982a07559d4a2f6c8744d840bf6fccab30eea96",
+    "file": "mmproj-Qwen3VL-8B-Instruct-F16.gguf",
+    "directory": "/run/media/usr/dados/Models/IMG/Qwen-Image-2.1-Turbo-Quantized",
+    "size": 1159029824,
+    "sha256": "ca524100ebf825c9a870db1c580d03879e0da0ab2541697e2458e64891cf9d38"
+  },
+  "upscaler_history": [
+    {
+      "name": "2xNomosUni esrgan multijpg",
+      "author": "Philip Hofmann",
+      "license": "CC-BY-4.0",
+      "repository": "https://huggingface.co/Phips/2xNomosUni_esrgan_multijpg",
+      "revision": "6d4be1a90e2f272053f2402b74df8977acd12e44",
+      "release": "https://github.com/Phhofm/models/releases/tag/2xNomosUni_esrgan_multijpg",
+      "file": "2xNomosUni_esrgan_multijpg.safetensors",
+      "directory": "/run/media/usr/dados/Models/IMG/Upscalers",
+      "size": 33478206,
+      "sha256": "d71c55cc1c70fbb7ac42a25e37bcb99a46672de0bc750924bea81e57c163b5ab"
+    }
+  ],
+  "z_image_turbo": {
+    "directory": "/run/media/usr/dados/Models/IMG/Z-Image-Turbo-GGUF",
+    "files": [
+      {
+        "repo": "leejet/Z-Image-Turbo-GGUF",
+        "revision": "c61c0e422dc8b541b7548cf33a4ef8302b0f8085",
+        "remote": "z_image_turbo-Q8_0.gguf",
+        "size": 6577440704,
+        "sha256": "df1c5baa86d1398c979495a6072dbcee79444fdb884a2445582ba0769c44e9a1",
+        "file": "/run/media/usr/dados/Models/IMG/Z-Image-Turbo-GGUF/z_image_turbo-Q8_0.gguf"
+      },
+      {
+        "repo": "unsloth/Qwen3-4B-Instruct-2507-GGUF",
+        "revision": "a06e946bb6b655725eafa393f4a9745d460374c9",
+        "remote": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+        "size": 2497281120,
+        "sha256": "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597",
+        "file": "/run/media/usr/dados/Models/IMG/Z-Image-Turbo-GGUF/Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+      },
+      {
+        "repo": "Comfy-Org/z_image_turbo",
+        "revision": "6fc90a3b1b653e935a0d175e260736de25b84df5",
+        "remote": "split_files/vae/ae.safetensors",
+        "size": 335304388,
+        "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38",
+        "file": "/run/media/usr/dados/Models/IMG/Z-Image-Turbo-GGUF/ae.safetensors"
+      }
+    ],
+    "steps": 9,
+    "cfg": 1,
+    "sampler": "euler",
+    "text_only": true
+  },
+  "official_models": [
+    "model",
+    "z_image_turbo"
+  ]
+}

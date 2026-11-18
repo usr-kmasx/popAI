@@ -1,0 +1,157 @@
+diff --git a/src/main.cpp b/src/main.cpp
+index 9d44c3d..94be12e 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -2,6 +2,9 @@
+ #include <iostream>
+ #include <stdio.h>
+ #include <algorithm>
++#include <atomic>
++#include <climits>
++#include <chrono>
+ #include <queue>
+ #include <vector>
+ #include <clocale>
+@@ -201,6 +204,7 @@ static void print_usage()
+     fprintf(stderr, "  -h                   show this help\n");
+     fprintf(stderr, "  -i input-path        input image path (jpg/png/webp) or directory\n");
+     fprintf(stderr, "  -o output-path       output image path (jpg/png/webp) or directory\n");
++    fprintf(stderr, "  -2                   apply the same model twice before the final resize\n");
+     fprintf(stderr, "  -z model-scale       scale according to the model (can be 2, 3, 4. default=4)\n");
+     fprintf(stderr, "  -s output-scale      custom output scale (can be 2, 3, 4. default=4)\n");
+     fprintf(stderr, "  -r resize            resize output to dimension (default=WxH:default), use '-r help' for more details\n");
+@@ -295,6 +299,7 @@ private:
+ 
+ TaskQueue toproc;
+ TaskQueue tosave;
++std::atomic<bool> processing_failed{false};
+ 
+ class LoadThreadParams
+ {
+@@ -389,6 +394,7 @@ void *load(void *args)
+         {
+             Task v;
+             v.id = i;
++            v.webp = webp;
+             v.inpath = imagepath;
+             v.outpath = ltp->output_files[i];
+ 
+@@ -426,8 +432,34 @@ class ProcThreadParams
+ {
+ public:
+     const RealESRGAN *realesrgan;
++    bool two_passes;
+ };
+ 
++// The PNG round trip between passes previously carried these same 8-bit pixels.
++static bool apply_second_pass(const RealESRGAN &model, ncnn::Mat &image)
++{
++    const int scale = model.scale;
++    if (scale <= 0 || image.w > INT_MAX / scale || image.h > INT_MAX / scale)
++        return false;
++
++    const int w = image.w * scale;
++    const int h = image.h * scale;
++    if (static_cast<size_t>(w) > INT_MAX / image.elemsize / h)
++        return false;
++
++    ncnn::Mat enlarged(w, h, image.elemsize, image.elempack);
++    if (enlarged.empty())
++        return false;
++
++    const auto now = std::chrono::system_clock::now().time_since_epoch();
++    const auto started_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
++    fprintf(stderr, "[popAI] upscale pass 2 %lld\n", static_cast<long long>(started_ms));
++    if (model.process(image, enlarged) != 0)
++        return false;
++    image = enlarged;
++    return true;
++}
++
+ void *proc(void *args)
+ {
+     const ProcThreadParams *ptp = (const ProcThreadParams *)args;
+@@ -442,7 +474,13 @@ void *proc(void *args)
+         if (v.id == -233)
+             break;
+ 
+-        realesrgan->process(v.inimage, v.outimage);
++        if (v.outimage.empty() || realesrgan->process(v.inimage, v.outimage) != 0 ||
++            (ptp->two_passes && !apply_second_pass(*realesrgan, v.outimage)))
++        {
++            fprintf(stderr, "Upscaling failed.\n");
++            processing_failed = true;
++            v.outimage.release();
++        }
+ 
+         tosave.put(v);
+     }
+@@ -585,6 +623,9 @@ void *save(void *args)
+             }
+         }
+ 
++        if (v.outimage.empty())
++            continue;
++
+         if (stp->hasOutputScale)
+         {
+             scale_output_image(v, stp);
+@@ -696,12 +737,13 @@ int main(int argc, char **argv)
+     int jobs_save = 2;
+     int verbose = 0;
+     int tta_mode = 0;
++    bool two_passes = false;
+     path_t format = PATHSTR("png");
+ 
+ #if _WIN32
+     setlocale(LC_ALL, "");
+     wchar_t opt;
+-    while ((opt = getopt(argc, argv, L"i:o:z:s:r:w:t:c:m:n:g:j:f:vxh")) != (wchar_t)-1)
++    while ((opt = getopt(argc, argv, L"i:o:z:s:r:w:t:c:m:n:g:j:f:vxh2")) != (wchar_t)-1)
+     {
+         switch (opt)
+         {
+@@ -775,6 +817,9 @@ int main(int argc, char **argv)
+         case L'v':
+             verbose = 1;
+             break;
++        case L'2':
++            two_passes = true;
++            break;
+         case L'x':
+             tta_mode = 1;
+             break;
+@@ -787,7 +832,7 @@ int main(int argc, char **argv)
+ #else  // _WIN32
+     int opt;
+     fprintf(stderr, "🚀 Starting Upscayl - Copyright © 2024\n");
+-    while ((opt = getopt(argc, argv, "i:o:z:s:r:w:t:c:m:n:g:j:f:vxh")) != -1)
++    while ((opt = getopt(argc, argv, "i:o:z:s:r:w:t:c:m:n:g:j:f:vxh2")) != -1)
+     {
+         switch (opt)
+         {
+@@ -861,6 +906,9 @@ int main(int argc, char **argv)
+         case 'v':
+             verbose = 1;
+             break;
++        case '2':
++            two_passes = true;
++            break;
+         case 'x':
+             tta_mode = 1;
+             break;
+@@ -1189,6 +1237,7 @@ int main(int argc, char **argv)
+             for (int i = 0; i < use_gpu_count; i++)
+             {
+                 ptp[i].realesrgan = realesrgan[i];
++                ptp[i].two_passes = two_passes;
+             }
+ 
+             std::vector<ncnn::Thread *> proc_threads(total_jobs_proc);
+@@ -1259,5 +1308,5 @@ int main(int argc, char **argv)
+ 
+     ncnn::destroy_gpu_instance();
+ 
+-    return 0;
++    return processing_failed ? EXIT_FAILURE : EXIT_SUCCESS;
+ }

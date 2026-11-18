@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 200 200" fill="none">
+<title>Mascote popAI</title>
+<style>        @keyframes floatIdle {
+            0%, 100% { transform: translateY(0px) rotate(0deg); }
+            50% { transform: translateY(-6px) rotate(0.5deg); }
+        }
+        @keyframes breatheIdle {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.015, 0.995); }
+        }
+        @keyframes blinkEye {
+            0%, 46%, 50%, 100% { transform: scaleY(1); }
+            48% { transform: scaleY(0.08); }
+        }
+        @keyframes pulseCore {
+            0%, 100% { opacity: 0.85; filter: drop-shadow(0 0 4px rgba(122,139,116,0.3)); }
+            50% { opacity: 1; filter: drop-shadow(0 0 10px rgba(122,139,116,0.7)); }
+        }
+        @keyframes antennaSway {
+            0%, 100% { transform: rotate(0deg); }
+            50% { transform: rotate(3deg); }
+        }
+
+        .mascot-float {
+            animation: floatIdle 6s ease-in-out infinite;
+        }
+        .mascot-breathe {
+            animation: breatheIdle 4s ease-in-out infinite;
+            transform-origin: center bottom;
+        }
+        .mascot-eye { animation: blinkEye 6s ease-in-out infinite; }
+        .eye-left { transform-origin: 89.0px 107.0px; }
+        .eye-right { transform-origin: 111.0px 111.0px; }
+        .mascot-core {
+            animation: pulseCore 3s ease-in-out infinite;
+        }
+        .mascot-antenna {
+            animation: antennaSway 5s ease-in-out infinite;
+            transform-origin: 100px 75px;
+        }
+
+
+@keyframes lookAround {0%,18%,100%{transform:translate(0,0)}28%,44%{transform:translate(-3px,-1px)}60%,78%{transform:translate(3px,-2px)}88%{transform:translate(0,0)}}
+.mascot-look{animation:lookAround 9s ease-in-out infinite}
+@media(prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+<g class="mascot-float"><g class="mascot-breathe">
+                            <!-- Background subtle aura ring -->
+                            <circle cx="100" cy="100" r="75" stroke="#2e312c" stroke-width="1.5" stroke-dasharray="4 8" opacity="0.6"/>
+
+                            <!-- Antenna -->
+                            <g class="mascot-antenna">
+                                <line x1="100" y1="75" x2="100" y2="40" stroke="#2e312c" stroke-width="2" stroke-linecap="round"/>
+                                <circle cx="100" cy="35" r="5" fill="#7a8b74" stroke="#2e312c" stroke-width="1.5" class="mascot-core"/>
+                            </g>
+
+                            <!-- Main Ceramic Body (Capsule / Rounded architectural shape) -->
+                            <rect x="55" y="70" width="90" height="95" rx="45" fill="#e8e9e4" stroke="#2e312c" stroke-width="2" />
+                            
+                            <!-- Inner Visor / Faceplate -->
+                            <rect x="68" y="85" width="64" height="48" rx="24" fill="#1f211e" stroke="#2e312c" stroke-width="1.5" />
+
+                            <!-- Face Elements / Eyes -->
+                            <g id="mascotFace"><g class="mascot-look"><g class="mascot-eye eye-left"><circle cx="89" cy="107" r="5" fill="#7a8b74" />
+                    </g><g class="mascot-eye eye-right"><circle cx="111" cy="111" r="3.5" fill="#7a8b74" />
+                    </g></g><circle cx="102" cy="120" r="2.5" fill="#7a8b74" id="mascotMouth" /></g>
+
+                            <!-- Chest Core Processor Light -->
+                            <circle cx="100" cy="150" r="3.5" fill="#7a8b74" class="mascot-core"/>
+                            
+                            <!-- Minimalist Shoulder/Base accents -->
+                            <path d="M57 125 C45 130 45 145 57 150" stroke="#2e312c" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+                            <path d="M143 125 C155 130 155 145 143 150" stroke="#2e312c" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+                        </g></g>
+</svg>

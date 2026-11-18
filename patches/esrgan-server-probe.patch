@@ -1,0 +1,19 @@
+diff --git a/src/upscaler.cpp b/src/upscaler.cpp
+index 9a16c0a..b59a5db 100644
+--- a/src/upscaler.cpp
++++ b/src/upscaler.cpp
+@@ -173,10 +173,12 @@ int sd_upscaler_probe_scale(const char* model_path) {
+         if (first == tensors.end() || last == tensors.end() ||
+             tensors.count("body.0.rdb1.conv1.weight") == 0 ||
+             first->second.n_dims != 4 || last->second.n_dims != 4 ||
+-            first->second.ne[2] != 3 || last->second.ne[3] != 3) {
++            (first->second.ne[2] != 3 && first->second.ne[2] != 12 && first->second.ne[2] != 48) ||
++            last->second.ne[3] != 3) {
+             return 0;
+         }
+-        return ESRGANConfig::detect_from_weights(tensors).scale;
++        const auto config = ESRGANConfig::detect_from_weights(tensors);
++        return config.scale / config.input_unshuffle;
+     } catch (const std::exception&) {
+         return 0;
+     }

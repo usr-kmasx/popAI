@@ -1,0 +1,157 @@
+diff --git a/docs/models/esrgan.md b/docs/models/esrgan.md
+index 3d1a589..ac49d22 100644
+--- a/docs/models/esrgan.md
++++ b/docs/models/esrgan.md
+@@ -10,6 +10,7 @@ upscaler with `--upscale-model`.
+ | Base model | [Stable Diffusion checkpoint](sd.md) | `-m` / `--model` | Required for generation below |
+ | ESRGAN upscaler | [RealESRGAN_x4plus_anime_6B.pth](https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth) | `--upscale-model` | Choose a compatible upscaler |
+ | MoSR upscaler | [4xNomos2_hq_mosr.pth](https://github.com/Phhofm/models/releases/download/4xNomos2_hq_mosr/4xNomos2_hq_mosr.pth) | `--upscale-model` | Alternative; requires the PixelShuffle upsampler |
++| ESRGAN 2x | [2xNomosUni esrgan multijpg](https://github.com/Phhofm/models/releases/tag/2xNomosUni_esrgan_multijpg) | `--upscale-model` | Supports RGB pixel-unshuffle input; use even input and tile dimensions |
+ 
+ ## Usage
+ 
+@@ -37,6 +38,11 @@ CLI examples use the [shared path and shell conventions](README.md#example-conve
+ 
+ ## Notes and limitations
+ 
++Standalone upscaling uses `-M upscale -i input.png --upscale-model model.safetensors -o output.png`.
++This mode does not load diffusion weights. ESRGAN weights with 12 input channels
++use pixel-unshuffle by 2 before the network's 4x upsampling, for an effective 2x
++output; weights with 48 input channels similarly produce effective 1x output.
++
+ RGBA output retains its alpha channel during model upscaling and hires fix.
+ The upscaler processes RGB; alpha is resized with bilinear interpolation and
+ recombined with the result. The model architecture is detected from the weights.
+diff --git a/src/model/upscaler/esrgan.hpp b/src/model/upscaler/esrgan.hpp
+index d132f4f..4487709 100644
+--- a/src/model/upscaler/esrgan.hpp
++++ b/src/model/upscaler/esrgan.hpp
+@@ -11,6 +11,7 @@
+ #include "core/ggml_runner.h"
+ #include "core/util.h"
+ #include "model/common/ggml_block.hpp"
++#include "model/upscaler/esrgan_layout.hpp"
+ 
+ /*
+     ===================================    ESRGAN  ===================================
+@@ -27,6 +28,7 @@ struct ESRGANConfig {
+     int num_out_ch  = 3;
+     int num_feat    = 64;
+     int num_grow_ch = 32;
++    int input_unshuffle = 1;
+ 
+     static ESRGANConfig detect_from_weights(const String2TensorStorage& tensor_storage_map,
+                                             const std::string& prefix = "") {
+@@ -74,6 +76,14 @@ struct ESRGANConfig {
+         } else if (has_model_tensor) {
+             config.scale = 1;
+         }
++        if (const auto* first = find_weight("conv_first.weight")) {
++            config.num_in_ch = static_cast<int>(first->ne[2]);
++            if (config.num_in_ch == 12) {
++                config.input_unshuffle = 2;
++            } else if (config.num_in_ch == 48) {
++                config.input_unshuffle = 4;
++            }
++        }
+ 
+         if (has_model_tensor || has_conv_up1 || has_conv_up2) {
+             LOG_VERBOSE("esrgan: scale = %d, num_block = %d, num_in_ch = %d, num_out_ch = %d, num_feat = %d, num_grow_ch = %d",
+@@ -180,7 +190,7 @@ public:
+         blocks["conv_last"] = std::shared_ptr<GGMLBlock>(new Conv2d(this->config.num_feat, this->config.num_out_ch, {3, 3}, {1, 1}, {1, 1}));
+     }
+ 
+-    int get_scale() { return config.scale; }
++    int get_scale() { return config.scale / config.input_unshuffle; }
+     int get_num_block() { return config.num_block; }
+ 
+     ggml_tensor* lrelu(GGMLRunnerContext* ctx, ggml_tensor* x) {
+diff --git a/src/pipeline/image_upscale.cpp b/src/pipeline/image_upscale.cpp
+index 1ccb7b5..839a9a5 100644
+--- a/src/pipeline/image_upscale.cpp
++++ b/src/pipeline/image_upscale.cpp
+@@ -31,7 +31,7 @@ namespace sd::pipeline {
+         if (mosr_ != nullptr) {
+             return mosr_->config.scale;
+         }
+-        return esrgan_ != nullptr ? esrgan_->config.scale : 1;
++        return esrgan_ != nullptr ? esrgan_->config.scale / esrgan_->config.input_unshuffle : 1;
+     }
+ 
+     std::unique_ptr<ImageUpscaleModel> load_image_upscale_model(
+@@ -111,14 +111,29 @@ namespace sd::pipeline {
+         const auto compute   = [&](const Tensor<float>& tensor) {
+             return model.mosr_ != nullptr ? model.mosr_->compute(n_threads, tensor) : model.esrgan_->compute(n_threads, tensor);
+         };
+-        const int scale = model.scale();
++        int scale = model.scale();
++        if (model.esrgan_ != nullptr && model.esrgan_->config.input_unshuffle > 1) {
++            const auto shape = rgb.shape();
++            const int factor = model.esrgan_->config.input_unshuffle;
++            if (shape[0] % factor != 0 || shape[1] % factor != 0) {
++                LOG_ERROR("invalid input shape for ESRGAN pixel-unshuffle");
++                return {};
++            }
++            // Transform the full image before tiling so every tile shares the same pixel phase.
++            rgb = Tensor<float>({shape[0] / factor, shape[1] / factor, shape[2] * factor * factor, shape[3]},
++                                esrgan_pixel_unshuffle(rgb.data(), shape[0], shape[1], shape[2], shape[3], factor));
++            scale = model.esrgan_->config.scale;
++            if (tile_size > 0) {
++                tile_size = std::max(1, tile_size / factor);
++            }
++        }
+         Tensor<float> output;
+-        if (tile_size <= 0 || (input.shape()[0] <= tile_size && input.shape()[1] <= tile_size)) {
++        if (tile_size <= 0 || (rgb.shape()[0] <= tile_size && rgb.shape()[1] <= tile_size)) {
+             output = compute(rgb);
+         } else {
+             output = process_tiles_2d(rgb,
+-                                      static_cast<int>(input.shape()[0] * scale),
+-                                      static_cast<int>(input.shape()[1] * scale),
++                                      static_cast<int>(rgb.shape()[0] * scale),
++                                      static_cast<int>(rgb.shape()[1] * scale),
+                                       scale, tile_size, tile_size, 0.25f, false, false, compute);
+         }
+         if (output.empty()) {
+diff --git a/src/model/upscaler/esrgan_layout.hpp b/src/model/upscaler/esrgan_layout.hpp
+new file mode 100644
+--- /dev/null
++++ b/src/model/upscaler/esrgan_layout.hpp
+@@ -0,0 +1,37 @@
++#ifndef SD_ESRGAN_LAYOUT_HPP
++#define SD_ESRGAN_LAYOUT_HPP
++
++#include <cstdint>
++#include <stdexcept>
++#include <vector>
++
++inline std::vector<float> esrgan_pixel_unshuffle(const float* input, int64_t width,
++                                               int64_t height, int64_t channels,
++                                               int64_t batches, int64_t factor) {
++    if (!input || factor < 1 || width < 1 || height < 1 || channels < 1 || batches < 1 ||
++        width % factor != 0 || height % factor != 0) {
++        throw std::invalid_argument("ESRGAN input is not divisible by pixel-unshuffle factor");
++    }
++    const int64_t out_width = width / factor;
++    const int64_t out_height = height / factor;
++    const int64_t out_channels = channels * factor * factor;
++    std::vector<float> output(width * height * channels * batches);
++    for (int64_t n = 0; n < batches; ++n) {
++        for (int64_t c = 0; c < channels; ++c) {
++            for (int64_t dy = 0; dy < factor; ++dy) {
++                for (int64_t dx = 0; dx < factor; ++dx) {
++                    const int64_t out_c = c * factor * factor + dy * factor + dx;
++                    for (int64_t y = 0; y < out_height; ++y) {
++                        for (int64_t x = 0; x < out_width; ++x) {
++                            output[x + out_width * (y + out_height * (out_c + out_channels * n))] =
++                                input[x * factor + dx + width * (y * factor + dy + height * (c + channels * n))];
++                        }
++                    }
++                }
++            }
++        }
++    }
++    return output;
++}
++
++#endif
