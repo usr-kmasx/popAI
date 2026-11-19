@@ -1,0 +1,86 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_control_flow_attributes : require
+
+// Same three buffers and push constants as ggml's scalar Q8_0 x FP32 pipeline.
+// Each invocation accumulates four output rows across several input columns.
+layout(local_size_x_id = 0) in;
+layout(constant_id = 0) const uint threads = 256;
+layout(constant_id = 1) const uint rows = 64;
+layout(constant_id = 2) const uint cols = 128;
+
+struct Q8Block {
+    float16_t scale;
+    uint16_t pairs[16];
+};
+layout(std430, binding = 0) readonly buffer Weights { Q8Block weights[]; };
+layout(std430, binding = 1) readonly buffer Input { float inputs[]; };
+layout(std430, binding = 2) writeonly buffer Output { float outputs[]; };
+layout(push_constant) uniform Params {
+    uint m, n, k, strideA, strideB, strideD;
+    uint batchA, batchB, batchD, baseZ, batches, splitK;
+    uint ne02, ne12, broadcast2, broadcast3;
+} p;
+
+const uint groupRows = rows / 4;
+const uint groupCols = threads / groupRows;
+const uint perLaneCols = cols / groupCols;
+shared vec2 aTile[16 * rows];
+shared vec2 bTile[16 * cols];
+
+void main() {
+    uint lane = gl_LocalInvocationIndex;
+    uint blocksM = (p.m + rows - 1) / rows;
+    uint firstRow = (gl_WorkGroupID.x % blocksM) * rows;
+    uint firstCol = gl_WorkGroupID.y * cols;
+    uint split = gl_WorkGroupID.x / blocksM;
+    uint batch = gl_WorkGroupID.z + p.baseZ;
+    uint aBatch = (batch / p.ne12 / p.broadcast3) * p.ne02
+                + (batch % p.ne12) / p.broadcast2;
+    uint r = (lane % groupRows) * 4;
+    uint c = lane / groupRows;
+    vec4 accum[perLaneCols];
+    [[unroll]] for (uint j = 0; j < perLaneCols; ++j) accum[j] = vec4(0);
+    uint end = min(p.k, (split + 1) * p.splitK);
+    for (uint k = split * p.splitK; k < end; k += 32) {
+        for (uint idx = lane; idx < rows * 16; idx += threads) {
+            uint row = idx / 16;
+            uint pair = idx % 16;
+            vec2 v = vec2(0);
+            if (firstRow + row < p.m) {
+                uint block = (aBatch * p.batchA + (firstRow + row) * p.strideA + k) / 32;
+                int bits = int(weights[block].pairs[pair]);
+                v = vec2(bitfieldExtract(bits, 0, 8), bitfieldExtract(bits, 8, 8))
+                    * float(weights[block].scale);
+            }
+            aTile[pair * rows + row] = v;
+        }
+        for (uint idx = lane; idx < cols * 16; idx += threads) {
+            uint col = idx / 16;
+            uint pair = idx % 16;
+            uint addr = batch * p.batchB + (firstCol + col) * p.strideB + k + 2 * pair;
+            bTile[pair * cols + col] = firstCol + col < p.n ? vec2(inputs[addr], inputs[addr + 1]) : vec2(0);
+        }
+        barrier();
+        [[unroll]] for (uint pair = 0; pair < 16; ++pair) {
+            uint addr = pair * rows + r;
+            vec2 a0 = aTile[addr], a1 = aTile[addr + 1], a2 = aTile[addr + 2], a3 = aTile[addr + 3];
+            vec4 even = vec4(a0.x, a1.x, a2.x, a3.x);
+            vec4 odd = vec4(a0.y, a1.y, a2.y, a3.y);
+            [[unroll]] for (uint j = 0; j < perLaneCols; ++j) {
+                vec2 v = bTile[pair * cols + c + j * groupCols];
+                accum[j] = fma(even, vec4(v.x), fma(odd, vec4(v.y), accum[j]));
+            }
+        }
+        barrier();
+    }
+    uint offset = (batch + split * p.batches) * p.batchD;
+    [[unroll]] for (uint j = 0; j < perLaneCols; ++j) {
+        uint col = firstCol + c + j * groupCols;
+        if (col >= p.n) continue;
+        [[unroll]] for (uint i = 0; i < 4; ++i) {
+            if (firstRow + r + i < p.m)
+                outputs[offset + col * p.strideD + firstRow + r + i] = accum[j][i];
+        }
+    }
+}
