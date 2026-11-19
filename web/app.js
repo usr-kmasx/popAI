@@ -184,6 +184,7 @@ const modelApply = document.querySelector('#model-apply');
 const outputAspect = document.querySelector('#output-aspect');
 const generationSize = document.querySelector('#generation-size');
 const outputResolution = document.querySelector('#output-resolution');
+const adaptiveWeights = document.querySelector('#adaptive-weights');
 const keepLoaded = document.querySelector('#keep-loaded');
 const keepStatus = document.querySelector('#keep-status');
 const timeEstimate = document.querySelector('#time-estimate');
@@ -703,6 +704,7 @@ async function openConfig(tab = 'general') {
     choosePreset();
     outputResolution.value = catalog.selected.resolution || '1080p';
     keepLoaded.checked = Boolean(catalog.selected.keep_loaded);
+    adaptiveWeights.checked = Boolean(catalog.selected.adaptive_weights);
     modelStatus.textContent = catalog.errors.join(' · ');
     if (tab === 'models') await loadLibrary();
     for (const key of ['device','upscale_device','compatibility']) hardwareInputs[key].value = catalog.selected.hardware?.[key] || 'auto';
@@ -765,7 +767,7 @@ modelApply.addEventListener('click', async () => {
       customDraft = readSd();
       customModel = {profile:activeFamily,...Object.fromEntries(['diffusion','encoder','vae','vision'].map(key => [key,modelSlots[key].value]))};
     }
-    const settings = {model_roots:modelRootPaths,hardware:{device:hardwareInputs.device.value,upscale_device:hardwareInputs.upscale_device.value,compatibility:hardwareInputs.compatibility.value}, profile:activeFamily, sd_custom_model:customModel, sd_profile:modelProfile.value, sd_custom:customDraft, keep_loaded:keepLoaded.checked, resolution:outputResolution.value, aspect_ratio:outputAspect.value, generation_size:generationSize.value, ...Object.fromEntries(Object.entries(modelSlots).map(([key, select]) => [key,select.value]))};
+    const settings = {model_roots:modelRootPaths,hardware:{device:hardwareInputs.device.value,upscale_device:hardwareInputs.upscale_device.value,compatibility:hardwareInputs.compatibility.value}, profile:activeFamily, sd_custom_model:customModel, sd_profile:modelProfile.value, sd_custom:customDraft, keep_loaded:keepLoaded.checked, adaptive_weights:adaptiveWeights.checked, resolution:outputResolution.value, aspect_ratio:outputAspect.value, generation_size:generationSize.value, ...Object.fromEntries(Object.entries(modelSlots).map(([key, select]) => [key,select.value]))};
     const saved = await request('/api/models', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(settings)});
     activeFamily = saved.profile;
     modelsReady = true;

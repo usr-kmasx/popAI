@@ -104,6 +104,7 @@ class GenerationManager:
         self.cancel_event = threading.Event()
         self.resident = ResidentEngine()
         self.keep_loaded = False
+        self.adaptive_weights = False
         self.resolution = '1080p'
         self.aspect_ratio = '16:9'
         self.generation_size = 'standard'
@@ -284,6 +285,7 @@ class GenerationManager:
             return {'profile': self.profile, 'diffusion': str(self.model),
                     'encoder': str(self.encoder) if self.encoder else '', 'vae': str(self.vae) if self.vae else '',
                     'vision': str(self.vision) if self.vision else '', 'keep_loaded': self.keep_loaded,
+                    'adaptive_weights': self.adaptive_weights,
                     'resolution': self.resolution, 'aspect_ratio':self.aspect_ratio, 'generation_size':self.generation_size, 'model_roots': [str(p) for p in self.library.roots()],
                     'hardware': dict(self.hardware), 'schema_version': 2, 'sd_profile':self.sd_profile,
                     'sd_default':dict(SD_DEFAULT), 'sd_defaults':SD_DEFAULTS, 'sd_custom':dict(self.sd_custom), 'sd_custom_model':dict(self.sd_custom_model)}
@@ -416,6 +418,9 @@ class GenerationManager:
         keep_loaded = settings.get('keep_loaded', self.keep_loaded)
         if not isinstance(keep_loaded, bool):
             raise ValueError('A opção de manter modelo carregado deve ser ligada ou desligada.')
+        adaptive_weights = settings.get('adaptive_weights', self.adaptive_weights)
+        if not isinstance(adaptive_weights, bool):
+            raise ValueError('Escolha ligar ou desligar a distribuição automática dos pesos.')
         resolution = settings.get('resolution', self.resolution)
         if not isinstance(resolution, str) or resolution not in RESOLUTIONS:
             raise ValueError('Escolha uma resolução entre 720p e 4K UHD.')
@@ -450,14 +455,14 @@ class GenerationManager:
             if self.closed or self.job['state'] == 'running':
                 raise RuntimeError('Aguarde o pedido terminar antes de trocar o modelo.')
             if persist:
-                saved = {'profile': settings['profile'], 'keep_loaded': keep_loaded, 'resolution': resolution, 'aspect_ratio':aspect_ratio, 'generation_size':generation_size,
+                saved = {'profile': settings['profile'], 'keep_loaded': keep_loaded, 'adaptive_weights': adaptive_weights, 'resolution': resolution, 'aspect_ratio':aspect_ratio, 'generation_size':generation_size,
                          'model_roots': [str(p) for p in roots], 'hardware': hardware_settings, 'sd_profile':sd_profile, 'sd_custom':sd_custom, 'sd_custom_model':custom_model,
                          **{key: str(value) if value else '' for key, value in paths.items()}}
                 self.store.save(saved)
             old_sd = self.sd_custom if self.sd_profile=='custom' else SD_DEFAULTS[self.sd_profile]
             new_sd = sd_custom if sd_profile=='custom' else SD_DEFAULTS[sd_profile]
             reload_required = old_sd['mmap'] != new_sd['mmap'] or any(hardware_settings[key]!=self.hardware[key] for key in ('device','compatibility')) or self.profile != settings['profile'] or (self.model,self.encoder,self.vae) != tuple(paths[key] for key in ('diffusion','encoder','vae'))
-            if reload_required or not keep_loaded:
+            if reload_required or adaptive_weights != self.adaptive_weights or not keep_loaded:
                 self.resident.stop()
             if self.resident_policy and hardware_settings['upscale_device'] != self.hardware['upscale_device']:
                 self.resident_policy = {**self.resident_policy,'refresh_upscaler':True}
@@ -465,6 +470,7 @@ class GenerationManager:
             self.sd_custom_model = custom_model
             self.hardware = hardware_settings
             self.keep_loaded = keep_loaded
+            self.adaptive_weights = adaptive_weights
             self.resolution = resolution
             self.aspect_ratio, self.generation_size = aspect_ratio, generation_size
             self.model_roots = roots
@@ -696,7 +702,7 @@ class GenerationManager:
             self.job = {'version': 1, 'artifacts_version':2, 'id': identity, 'state': 'running', 'image': None, 'error': None,
                         'started': time.time(), 'seed': seed, 'phase': 'generating',
                         'resolution': self.resolution, 'aspect_ratio':self.aspect_ratio, 'generation_size':self.generation_size, 'hardware': policy, **geometry}
-            self.job['settings'] = {'profile':self.profile, 'diffusion':str(self.model), 'encoder':str(self.encoder), 'vae':str(self.vae), 'vision':str(self.vision) if self.vision else '', 'keep_loaded':self.keep_loaded, 'upscale_model':str(self.upscale_model), 'sd':dict(self.sd_custom if self.sd_profile=='custom' else SD_DEFAULTS[self.sd_profile])}
+            self.job['settings'] = {'profile':self.profile, 'diffusion':str(self.model), 'encoder':str(self.encoder), 'vae':str(self.vae), 'vision':str(self.vision) if self.vision else '', 'keep_loaded':self.keep_loaded, 'adaptive_weights':self.adaptive_weights, 'upscale_model':str(self.upscale_model), 'sd':dict(self.sd_custom if self.sd_profile=='custom' else SD_DEFAULTS[self.sd_profile])}
             self.job['reference_ids'] = references
             self.job['model_loaded_at_start'] = self.resident.loaded()
             try:
@@ -756,7 +762,8 @@ class GenerationManager:
         device = policy['generator']['ggml']
         components = ['--diffusion-model', settings['diffusion'], '--llm', settings['encoder'], '--vae', settings['vae']]
         runtime_backend = f'diffusion={device},te={device},vae={device}'
-        memory_args = ['--offload-to-cpu']
+        weight_args = ['--auto-fit', 'on'] if settings.get('adaptive_weights') else ['--offload-to-cpu']
+        memory_args = list(weight_args)
         if profile['mmap']:
             memory_args.append('--mmap')
         if profile['vae_tiling']:
@@ -802,7 +809,7 @@ class GenerationManager:
                         raise RuntimeError('Motor persistente não compilado. Execute ./build.sh.')
                     startup = [str(server_executable), *components,
                                '--backend', runtime_backend,
-                               '--offload-to-cpu', *(['--mmap'] if profile['mmap'] else [])]
+                               *weight_args, *(['--mmap'] if profile['mmap'] else [])]
                     check = lambda: self._check_active(deadline)
                     started = time.monotonic()
                     self.resident.ensure(startup, env, ROOT, self.logs / 'resident.log',
