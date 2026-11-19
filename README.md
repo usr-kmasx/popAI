@@ -114,10 +114,12 @@ ampliações 4× com uma única carga dos pesos. Os pixels de 8 bits da primeira
 passagem seguem em memória para a segunda. O ajuste à resolução escolhida
 acontece depois das duas passagens e o ampliador encerra ao terminar.
 O executor local `backends/upscayl-ncnn/upscayl-chain` usa os mesmos pesos,
-GPU e blocos de 128 px do executor original. `./build.sh` prepara essa variante
-quando necessário e `./tools/build-upscayl.sh` permite recompilá-la à parte.
-Se ela estiver indisponível, o
-app usa o executor original em duas chamadas.
+GPU e blocos de 128 px do executor original. Quando a compilação encontra a
+libpng no Linux, o executor também grava o PNG diretamente das linhas do recorte
+final. Isso evita uma segunda gravação quando a ampliação excede o preset.
+`./build.sh` prepara essa variante e `./tools/build-upscayl.sh` permite
+recompilá-la à parte. O app detecta os recursos do executável. Versões anteriores
+continuam usando o recorte em Python e, quando necessário, duas chamadas para ampliar.
 
 **Nenhum PNG novo é salvo automaticamente em `outputs/`.** Bases, referências
 e ampliações são arquivos temporários em uma pasta privada `popai-*` no diretório

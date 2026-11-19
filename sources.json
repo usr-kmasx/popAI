@@ -178,6 +178,8 @@
       "revision": "22774bc42e2bc3c785b5b585d213d960b1348ad5",
       "patch": "patches/upscayl-two-pass.patch",
       "patch_sha256": "8a57abca8b781749190c7effa7481bcbf60f06ac00f581232b95092caefd238a",
+      "final_png_patch": "patches/upscayl-final-png.patch",
+      "final_png_patch_sha256": "f56feeea816560e97a7561df705ff514c56bd1a69e443b58e9b5ab912d9426d7",
       "build": "tools/build-upscayl.sh"
     },
     "model_scale": 4,

@@ -1,0 +1,174 @@
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -280,6 +280,14 @@
+
+ set(REALESRGAN_LINK_LIBRARIES ncnn webp ${Vulkan_LIBRARY})
+
++if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
++    find_package(PNG QUIET)
++    if(PNG_FOUND)
++        target_compile_definitions(upscayl-bin PRIVATE POPAI_FINAL_PNG)
++        list(APPEND REALESRGAN_LINK_LIBRARIES PNG::PNG)
++    endif()
++endif()
++
+ if(USE_STATIC_MOLTENVK)
+     find_library(CoreFoundation NAMES CoreFoundation)
+     find_library(Foundation NAMES Foundation)
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -29,6 +29,9 @@
+ #include "stb_image_write.h"
+ #endif // _WIN32
+ #include "webp_image.h"
++#ifdef POPAI_FINAL_PNG
++#include "final-png.h"
++#endif
+ #define STB_IMAGE_RESIZE2_IMPLEMENTATION
+ #include "stb_image_resize2.h"
+
+@@ -204,6 +207,9 @@
+     fprintf(stderr, "  -h                   show this help\n");
+     fprintf(stderr, "  -i input-path        input image path (jpg/png/webp) or directory\n");
+     fprintf(stderr, "  -o output-path       output image path (jpg/png/webp) or directory\n");
++#ifdef POPAI_FINAL_PNG
++    fprintf(stderr, "  -P widthxheight       encode a centered crop of the resized image as PNG\n");
++#endif
+     fprintf(stderr, "  -2                   apply the same model twice before the final resize\n");
+     fprintf(stderr, "  -z model-scale       scale according to the model (can be 2, 3, 4. default=4)\n");
+     fprintf(stderr, "  -s output-scale      custom output scale (can be 2, 3, 4. default=4)\n");
+@@ -491,6 +497,8 @@
+ class SaveThreadParams
+ {
+ public:
++    int png_width;
++    int png_height;
+     int resizeWidth;
+     int resizeHeight;
+     int resizeMode;
+@@ -654,6 +662,16 @@
+             fs::create_directories(parent_path);
+         }
+
++#ifdef POPAI_FINAL_PNG
++        if (stp->png_width)
++        {
++            success = write_final_png(v.outpath.c_str(), static_cast<const unsigned char*>(v.outimage.data),
++                                      v.outimage.w, v.outimage.h, v.outimage.elempack,
++                                      stp->png_width, stp->png_height);
++            if (!success) processing_failed = true;
++        }
++        else
++#endif
+         if (ext == PATHSTR("webp") || ext == PATHSTR("WEBP"))
+         {
+             success = webp_save(v.outpath.c_str(), v.outimage.w, v.outimage.h, v.outimage.elempack, (const unsigned char *)v.outimage.data, 100 - (int)stp->compression);
+@@ -738,6 +756,8 @@
+     int verbose = 0;
+     int tta_mode = 0;
+     bool two_passes = false;
++    int png_width = 0;
++    int png_height = 0;
+     path_t format = PATHSTR("png");
+
+ #if _WIN32
+@@ -832,7 +852,7 @@
+ #else  // _WIN32
+     int opt;
+     fprintf(stderr, "🚀 Starting Upscayl - Copyright © 2024\n");
+-    while ((opt = getopt(argc, argv, "i:o:z:s:r:w:t:c:m:n:g:j:f:vxh2")) != -1)
++    while ((opt = getopt(argc, argv, "i:o:z:s:r:w:t:c:m:n:g:j:f:vxh2P:")) != -1)
+     {
+         switch (opt)
+         {
+@@ -906,6 +926,15 @@
+         case 'v':
+             verbose = 1;
+             break;
++#ifdef POPAI_FINAL_PNG
++        case 'P': {
++            char trailing;
++            if (sscanf(optarg, "%5dx%5d%c", &png_width, &png_height, &trailing) != 2 ||
++                png_width <= 0 || png_height <= 0)
++                return EXIT_FAILURE;
++            break;
++        }
++#endif
+         case '2':
+             two_passes = true;
+             break;
+@@ -988,6 +1017,16 @@
+     {
+         fprintf(stderr, "🚨 Error: Invalid format provided!\n");
+         return -1;
++    }
++
++    if (png_width)
++    {
++        const path_t ext = path_is_directory(outputpath) ? format : get_file_extension(outputpath);
++        if (format != PATHSTR("png") || (ext != PATHSTR("png") && ext != PATHSTR("PNG")))
++        {
++            fprintf(stderr, "A PNG crop requires a PNG output.\n");
++            return EXIT_FAILURE;
++        }
+     }
+
+     // collect input and output filepath
+@@ -1254,6 +1293,8 @@
+
+             // save image
+             SaveThreadParams stp;
++            stp.png_width = png_width;
++            stp.png_height = png_height;
+             stp.resizeWidth = resizeWidth;
+             stp.resizeHeight = resizeHeight;
+             stp.resizeMode = resizeMode;
+--- /dev/null
++++ b/src/final-png.h
+@@ -0,0 +1,46 @@
++#pragma once
++
++#include <cstdio>
++#include <png.h>
++
++// Encode rows directly from the post-resize buffer. Keep its original stride
++// and use the same floor division as the center crop in the Python fallback.
++static bool write_final_png(const char* path, const unsigned char* pixels,
++                            int width, int height, int channels, int out_w, int out_h)
++{
++    if (!pixels || out_w <= 0 || out_h <= 0 || out_w > width || out_h > height ||
++        channels < 1 || channels > 4)
++        return false;
++
++    FILE* file = std::fopen(path, "wb");
++    if (!file) return false;
++    png_structp writer = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
++    png_infop info = writer ? png_create_info_struct(writer) : nullptr;
++    if (!info)
++    {
++        if (writer) png_destroy_write_struct(&writer, nullptr);
++        std::fclose(file);
++        return false;
++    }
++    bool written = false;
++    if (setjmp(png_jmpbuf(writer)) == 0)
++    {
++        const int color[] = {PNG_COLOR_TYPE_GRAY, PNG_COLOR_TYPE_GRAY_ALPHA,
++                             PNG_COLOR_TYPE_RGB, PNG_COLOR_TYPE_RGBA};
++        png_init_io(writer, file);
++        png_set_IHDR(writer, info, out_w, out_h, 8, color[channels - 1],
++                     PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
++        png_set_filter(writer, PNG_FILTER_TYPE_BASE, PNG_FILTER_PAETH);
++        png_set_compression_level(writer, 2);
++        png_write_info(writer, info);
++        const size_t stride = static_cast<size_t>(width) * channels;
++        const size_t offset = static_cast<size_t>((height - out_h) / 2) * stride
++                              + static_cast<size_t>((width - out_w) / 2) * channels;
++        for (int y = 0; y < out_h; ++y)
++            png_write_row(writer, pixels + offset + static_cast<size_t>(y) * stride);
++        png_write_end(writer, info);
++        written = true;
++    }
++    png_destroy_write_struct(&writer, &info);
++    return std::fclose(file) == 0 && written;
++}

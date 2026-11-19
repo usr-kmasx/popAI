@@ -20,7 +20,9 @@ mv "$ROOT/backends/process-guard.new" "$ROOT/backends/process-guard"
 mv "$ROOT/backends/vulkan-probe.new" "$ROOT/backends/vulkan-probe"
 
 upscaler="$ROOT/backends/upscayl-ncnn"
-if [[ -x "$upscaler/upscayl-bin" && ( ! -x "$upscaler/upscayl-chain" || "$ROOT/patches/upscayl-two-pass.patch" -nt "$upscaler/upscayl-chain" ) ]]; then
+if [[ -x "$upscaler/upscayl-bin" && ( ! -x "$upscaler/upscayl-chain" ||
+      "$ROOT/patches/upscayl-two-pass.patch" -nt "$upscaler/upscayl-chain" ||
+      "$ROOT/patches/upscayl-final-png.patch" -nt "$upscaler/upscayl-chain" ) ]]; then
   if ! "$ROOT/tools/build-upscayl.sh"; then
     echo 'A compilação da variante de duas passagens falhou. O executor original continua disponível.' >&2
   fi

@@ -19,6 +19,7 @@ git -C "$work/src" checkout -q --detach "$revision"
 git -C "$work/src" -c 'url.https://github.com/.insteadOf=git@github.com:' \
     submodule update --init --recursive --depth 1 --jobs "${BUILD_JOBS:-4}"
 git -C "$work/src" apply "$root/patches/upscayl-two-pass.patch"
+git -C "$work/src" apply "$root/patches/upscayl-final-png.patch"
 
 cmake="$root/tools/cmake-4.5.0-linux-x86_64/bin/cmake"
 if [[ ! -x "$cmake" ]]; then cmake=cmake; fi

@@ -26,7 +26,7 @@ from model_library import ModelLibrary
 from prompt_enhancer import PromptEnhancer, MAX_PROMPT_CHARS
 from errors import native_failure, explain
 from jobs import JobStore
-from image_pipeline import validate_image, finalize
+from image_pipeline import crop_box, validate_image, finalize
 from processes import spawn
 from resident import ResidentEngine, terminate
 from app_config import APP_ROOT, RESOURCE_ROOT, SettingsStore, normalize_roots, local_path, HARDWARE_DEFAULTS
@@ -49,24 +49,30 @@ MODEL_FILES = {
 
 
 @lru_cache(maxsize=4)
-def _accepts_two_passes(executable, revision):
+def _runner_options(executable, revision):
     # The packaged CLI prints help before creating a Vulkan device. Check once
     # per binary revision so older builds or incompatible loaders can fall back.
     try:
         help_text = subprocess.run([str(executable), '-h'], stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, timeout=3).stdout
     except (OSError, subprocess.SubprocessError):
-        return False
-    return b'  -2 ' in help_text
+        return frozenset()
+    return frozenset(flag for flag in ('-2', '-P') if f'  {flag} '.encode() in help_text)
 
 
-def _two_pass_upscaler(executable):
+def _companion_upscaler(executable):
     candidate = executable.with_name('upscayl-chain')
     try:
         stat = candidate.stat()
     except OSError:
-        return None
-    return candidate if _accepts_two_passes(candidate, (stat.st_ino, stat.st_ctime_ns)) else None
+        return candidate, frozenset()
+    return candidate, _runner_options(candidate, (stat.st_ino, stat.st_ctime_ns))
+
+
+def _encoded_size(job):
+    if job.get('native_final_png'):
+        return job.get('width'), job.get('height')
+    return job.get('upscaled_width'), job.get('upscaled_height')
 
 
 class GenerationManager:
@@ -230,9 +236,9 @@ class GenerationManager:
         if not job.get('id') or job.get('state') == 'done':
             return False
         base,upscaled=self._artifact_paths(job)
-        for path,dimensions in ((upscaled,('upscaled_width','upscaled_height')),(base,('base_width','base_height'))):
+        for path, size in ((upscaled, _encoded_size(job)), (base, (job.get('base_width'), job.get('base_height')))):
             try:
-                self._validate_image(path,tuple(job[key] for key in dimensions))
+                self._validate_image(path, size)
                 return True
             except (OSError,RuntimeError,KeyError):
                 pass
@@ -767,11 +773,24 @@ class GenerationManager:
         command.extend(['--preview', 'proj', '--preview-interval', '1', '--preview-path', str(step_preview)])
         upscale_model = Path(settings['upscale_model'])
         very_light = job.get('generation_size') == 'very-light'
+        resized_size = (job['upscaled_width'], job['upscaled_height'])
+        final_size = (job['width'], job['height'])
+        max_crop = 256 if very_light else 64
+        encoded_size = _encoded_size(job)
         intermediate = base.with_name('upscaled-first.png')
         upscale_options = ['-m', str(upscale_model.parent), '-n', upscale_model.stem,
                            '-z', '4', '-t', '128', '-j', '1:1:1', '-g', str(policy['upscaler']['index']), '-f', 'png']
         error = None
         failure = None
+        published = False
+
+        def publish_final(source, destination):
+            nonlocal published
+            with self.lock:
+                self._check_active(deadline)
+                os.replace(source, destination)
+                published = True
+
         try:
             deadline = time.monotonic() + 1800
             base.parent.mkdir(parents=True,exist_ok=True)
@@ -796,11 +815,12 @@ class GenerationManager:
                     log.write_text('Motor persistente: consulte logs/resident.log.\n', encoding='utf-8')
                 else:
                     generation_seconds = self._run_stage(command, log, env, deadline, 'a geração')
+            crop_box(resized_size, final_size, max_crop)
             intermediate_valid = False
             upscale_validation = None
             if resume:
                 try:
-                    upscale_validation = self._validate_image(upscaled, (job['upscaled_width'],job['upscaled_height']))
+                    upscale_validation = self._validate_image(upscaled, encoded_size)
                     intermediate_valid = True
                 except (OSError,RuntimeError):
                     pass
@@ -808,9 +828,14 @@ class GenerationManager:
                 self._validate_image(base, (base_width, base_height))
                 model_catalog.validate_upscaler(upscale_model)
                 self._check_active(deadline)
-                chained = _two_pass_upscaler(self.upscale_executable) if very_light else None
+                companion, options = _companion_upscaler(self.upscale_executable)
+                chained = very_light and '-2' in options
+                native_png = '-P' in options
+                encoded_size = final_size if native_png else resized_size
+                if resume:
+                    upscaled.unlink(missing_ok=True)
                 self._publish(phase='upscaling', phase_started=time.time(), upscale_pass=1,
-                              upscale_passes=2 if very_light else 1, upscale_chained=bool(chained),
+                              upscale_passes=2 if very_light else 1, upscale_chained=chained, native_final_png=native_png,
                               generation_seconds=self.job.get('generation_seconds',0) if resume else generation_seconds)
                 upscale_seconds = 0
                 next_input = base
@@ -821,15 +846,19 @@ class GenerationManager:
                     self._validate_image(intermediate, (base_width * 4, base_height * 4))
                     self._publish(upscale_pass=2, phase_started=time.time())
                     next_input = intermediate
-                upscale_command = [str(chained or self.upscale_executable), '-i', str(next_input), '-o', str(upscaled),
+                executor = companion if chained or native_png else self.upscale_executable
+                upscale_command = [str(executor), '-i', str(next_input), '-o', str(upscaled),
                                    *upscale_options, '-r', f"{job['upscaled_width']}x{job['upscaled_height']}"]
                 if chained:
                     upscale_command.append('-2')
+                if native_png:
+                    upscale_command.extend(['-P', f'{final_size[0]}x{final_size[1]}'])
                 upscale_seconds += self._run_stage(upscale_command, upscale_log, env, deadline, 'a ampliação')
-                upscale_validation = self._validate_image(upscaled, (job['upscaled_width'], job['upscaled_height']))
+                upscale_validation = self._validate_image(upscaled, encoded_size)
                 self._publish(upscale_seconds=round(upscale_seconds, 2), upscale_pass=2 if very_light else 1)
             self._publish(phase='finalizing')
-            finalize(upscaled, output, (job['upscaled_width'],job['upscaled_height']), (job['width'],job['height']), lambda: self._check_active(deadline), validation=upscale_validation, max_crop=256 if very_light else 64)
+            finalize(upscaled, output, encoded_size, final_size, lambda: self._check_active(deadline),
+                     validation=upscale_validation, max_crop=max_crop, publish=publish_final)
         except (OSError, RuntimeError, ValueError, KeyError, IndexError, MemoryError) as exc:
             failure = explain(exc)
             error = str(failure)
@@ -850,7 +879,7 @@ class GenerationManager:
                 pass
             with self.lock:
                 self.process = None
-                cancelled = self.cancel_event.is_set() or self.closed
+                cancelled = not published and (self.cancel_event.is_set() or self.closed)
                 state = 'cancelled' if cancelled else 'error' if error else 'done'
                 self.job.update(state=state, phase=state, error=None if cancelled else error,
                                 image=None if error or cancelled else '/images/' + job['id'] + '.png', finished=time.time())
