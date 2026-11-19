@@ -3,6 +3,13 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CMAKE="$ROOT/tools/cmake-4.5.0-linux-x86_64/bin/cmake"
 PREFIX="$ROOT/tools/local/prefix"
+ggml="$ROOT/backends/stable-diffusion.cpp/ggml"
+tile_patch="$ROOT/patches/vulkan-q8-fp32-tile.patch"
+patch_args=(--batch --fuzz=0 -d "$ggml" -p1 -i "$tile_patch")
+if ! patch "${patch_args[@]}" --reverse --force --dry-run >/dev/null; then
+  patch "${patch_args[@]}" --forward --dry-run
+  patch "${patch_args[@]}" --forward
+fi
 "$CMAKE" -S "$ROOT/tools/local/SPIRV-Headers-main" -B "$ROOT/tools/local/spirv-build" -G Ninja \
   -DSPIRV_HEADERS_ENABLE_TESTS=OFF -DCMAKE_INSTALL_PREFIX="$PREFIX"
 "$CMAKE" --install "$ROOT/tools/local/spirv-build"

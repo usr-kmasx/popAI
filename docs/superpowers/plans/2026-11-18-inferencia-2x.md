@@ -60,7 +60,13 @@ Foram 22 gerações em 11 pares. Nove pares cobrem os três modelos em paisagem,
 | Z-Image Turbo | 124,90 s | 114,98 s | −14,9% a +10,7% | 7,34 / 7,40 GiB |
 | FLUX.3 Image Klein | 138,50 s | 133,08 s | −7,5% a +6,8% | 7,05 / 6,98 GiB |
 
-¹ Um valor negativo indica que a candidata entregou a imagem mais cedo. As medianas agrupam estados de carga diferentes. O pico é o da placa inteira, amostrado a cada 100 ms. Todos os modelos tiveram pelo menos um par em que a candidata demorou mais. A geometria experimental ficou fora da distribuição.
+¹ Um valor negativo indica que a candidata entregou a imagem mais cedo. As medianas agrupam estados de carga diferentes. O pico é o da placa inteira, amostrado a cada 100 ms. Todos os modelos tiveram pelo menos um par em que a candidata demorou mais até a entrega.
+
+Na geração da base, o bloco de 64 × 128 reduziu o tempo em três dos três pares do Klein 4B, três dos três do Z-Image e dois dos três do FLUX.3. Com o motor já carregado, os ganhos respectivos foram 1,82 s, 7,22 s e 1,98 s. No FLUX.3 com processo novo, um par levou 9,23 s a mais e o outro 10,33 s a menos. As bases e as imagens finais coincidiram em cada comparação.
+
+Após a avaliação da geração separadamente, o bloco foi integrado ao caminho Vulkan escalar de multiplicação Q8_0 × FP32. A seleção ocorre por operação, no motor comum aos três modelos. O dispositivo precisa oferecer subgrupos de 64, grupos de trabalho de 256 na dimensão X e pelo menos 32 KiB de memória compartilhada. A seleção de blocos pequenos e grandes e os caminhos especializados do ggml continuam disponíveis. As medições de desempenho acima vieram de uma única GPU.
+
+Com o executável distribuído, repetimos o caso FLUX.3 de seed `181126`. A base ficou pronta em 110,60 s e o PNG 4K em 119,69 s. Os dois hashes RGB coincidiram com os da versão de referência. Essa execução verificou a integração. Os tempos comparativos são os dos pares acima. A biblioteca recompilada também reproduziu os hashes das três multiplicações de referência e de uma multiplicação com saída de 45 × 77.
 
 ## 5. Ampliação e gravação do PNG
 

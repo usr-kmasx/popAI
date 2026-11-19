@@ -18,7 +18,13 @@
     ]
   },
   "ggml": {
-    "revision": "eeda9ec48fc84a3df0bb9dcc19ae9053075a2539"
+    "revision": "eeda9ec48fc84a3df0bb9dcc19ae9053075a2539",
+    "local_patches": [
+      {
+        "file": "patches/vulkan-q8-fp32-tile.patch",
+        "sha256": "113fa2b9043a10f23158c4f882a9f226e952979977b4d0ef0130239633d8242e"
+      }
+    ]
   },
   "model": {
     "name": "FLUX.2 Klein 4B",

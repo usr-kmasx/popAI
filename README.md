@@ -60,6 +60,11 @@ O cálculo do gerador, encoder e VAE usa Vulkan. Os pesos têm offload para RAM,
 carregados na GPU conforme necessário. Não passamos `--max-vram`, não impomos
 reserva percentual nem rejeitamos pesos maiores que a VRAM. O motor respeita a
 memória física disponível; isso não torna a capacidade da GPU ilimitada.
+
+Os três perfis usam a mesma seleção de operações do ggml. Para multiplicações
+Q8_0 × FP32 no caminho escalar, o backend pode usar blocos de 64 × 128 conforme
+o tamanho do subgrupo, os limites de execução e a memória compartilhada que o
+dispositivo informa ao Vulkan.
 Manter carregado reutiliza o processo e o modelo, com pesos que podem ficar na
 RAM; não fixa todos os pesos na VRAM. A compatibilidade Polaris mantém os envios
 Vulkan em 4 nós e sincronizados, como no ajuste local anterior.

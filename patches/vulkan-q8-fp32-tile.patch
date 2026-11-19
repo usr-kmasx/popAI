@@ -1,0 +1,24 @@
+--- a/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -2960,8 +2960,20 @@
+             sg_create({GGML_TYPE_F16, GGML_TYPE_F32, false, false}, tc_mm, "matmul_f16_f32", matmul_f16_f32_fp32_len, matmul_f16_f32_fp32_data, sizeof(vk_mat_mat_push_constants), 3);
+             sg_create({GGML_TYPE_BF16, GGML_TYPE_BF16, false, false}, tc_mm, "matmul_bf16",  matmul_bf16_fp32_len,    matmul_bf16_fp32_data,    sizeof(vk_mat_mat_push_constants), 3);
+
++            // Reuse each Q8 weight tile across 128 columns on the scalar FP32 path.
++            // Keep the small and large tiles and the device's existing selector.
++            auto tc_q8_f32 = tc_mmq;
++            const auto& limits = device->properties.limits;
++            const std::vector<uint32_t> wide_tile = {256, 64, 128, 32, 32, 64, 2, 4, 2, 1, 64};
++            if (device->subgroup_size == 64 && device->mul_mat_m[GGML_TYPE_Q8_0] &&
++                limits.maxComputeWorkGroupInvocations >= 256 && limits.maxComputeWorkGroupSize[0] >= 256 &&
++                limits.maxComputeSharedMemorySize >= 32 * 1024 &&
++                ggml_vk_matmul_shmem_support(device, wide_tile, false, GGML_TYPE_Q8_0)) {
++                tc_q8_f32[1] = {wide_tile, {64, 128, 1}, 32};
++            }
+             for (const auto type : non_lut_quant_types) {
+-                sg_create_quant({type, GGML_TYPE_F32, false, false}, tc_mmq, "matmul_quant_f32", matmul_quant_f32_fp32_len, matmul_quant_f32_fp32_data, sizeof(vk_mat_mat_push_constants), 3);
++                const auto& tiles = type == GGML_TYPE_Q8_0 ? tc_q8_f32 : tc_mmq;
++                sg_create_quant({type, GGML_TYPE_F32, false, false}, tiles, "matmul_quant_f32", matmul_quant_f32_fp32_len, matmul_quant_f32_fp32_data, sizeof(vk_mat_mat_push_constants), 3);
+             }
+     #define X_SG_FP32(TYPE, tstr) \
+             sg_create({TYPE, GGML_TYPE_F32, false, false}, tc_mmq, "matmul_" #tstr "_f32", matmul_##tstr##_f32_fp32_len, matmul_##tstr##_f32_fp32_data, sizeof(vk_mat_mat_push_constants), 3);
