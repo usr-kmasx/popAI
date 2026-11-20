@@ -1,165 +1,173 @@
 # popAI
 
-Geração local com **Z-Image Turbo**, **FLUX.2 Klein 4B** e **FLUX 3 Image Klein**, stable-diffusion.cpp/Vulkan e
-ampliação geral Real-ESRGAN NCNN/Vulkan. Uso no Linux atual, sem pacote portátil.
+Generate, edit, and upscale wallpapers locally on Linux. popAI runs image models
+on Vulkan and exports PNGs up to 4K UHD at 16:9. It serves its interface in your
+browser and runs inference on your computer.
 
-## Iniciar e encerrar
+## Features
 
-Execute `./start.sh` e abra http://127.0.0.1:7860. Outra porta:
-`./start.sh --port 7861`. Ctrl+C encerra o servidor e seus motores.
-Após alterações no backend, reinicie o servidor. Fechar só a aba do navegador
-não encerra o servidor; use Ctrl+C para liberar o motor.
+- Text-to-image generation with Z-Image Turbo, FLUX.2 Klein 4B, and FLUX 3
+  Image Klein. Both Klein models support editing with up to 10 reference images.
+- Real-ESRGAN upscaling through NCNN and Vulkan. Choose the base generation
+  size, aspect ratio, and final resolution separately.
+- Model management with folder import, resumable downloads, and SHA-256 checks
+  against the published manifest.
+- Live progress and previews. The total includes preparation, generation,
+  upscaling, and PNG finalization. The clock shows an estimate for the current
+  stage when progress data is available.
+- Optional CPU-only prompt enhancement with **Simple**, **More details**, and
+  **Creative** modes, plus undo and cancellation.
 
-## Configurações
+## Getting started
 
-O botão ⚙ abre duas abas:
+This is a source release for x86-64 Linux. You need a Vulkan-capable GPU with a
+working driver, Python 3.12 or newer with Pillow, and enough disk space for the
+models you choose. Building the engines requires Git, a C/C++ toolchain, Ninja,
+`patch`, `unzip`, `glslc`, and the Vulkan loader and development libraries. The optional
+direct PNG writer also uses libpng development headers.
 
-- **Geral**: proporção, resolução final, geração Padrão/Leve, pastas de modelos e manter motor carregado.
-- **Stable Diffusion**: conjunto oficial, parâmetros de geração e GPU Vulkan.
+Clone the release and open the project folder.
 
-Os conjuntos padrão são **Z-Image Turbo Q8** (9 passos, CFG 1, Euler,
-scheduler automático), **FLUX.2 Klein 4B Q8** (4 passos, CFG 1, Euler,
-scheduler flux2) e **FLUX 3 Image Klein Q8** (16 passos, CFG 1, Euler, scheduler discrete). Seus encoders e VAEs oficiais são escolhidos automaticamente
-na biblioteca. Componentes compatíveis dessas mesmas famílias são identificados
-pelo conteúdo, inclusive arquivos renomeados e outras quantizações. Os pesos atuais continuam no SSD externo; não foram
-copiados para a partição do projeto. DreamShaper foi removido.
+```bash
+git clone --branch 20.11.26 https://github.com/usr-kmasx/popAI.git
+cd popAI
+```
 
-**Personalizado** ajusta os parâmetros de um desses conjuntos. Alterar passos,
-CFG, sampler, scheduler, resolução ou VAE em blocos não descarrega o gerador.
-Trocar conjunto, GPU de geração, compatibilidade Vulkan ou mmap exige recarga.
-A GPU do ampliador pode ser trocada sem descarregar o gerador.
-Se a ampliação falhar por um arquivo inválido ou um erro de gravação, o gerador
-residente continua disponível. O app o libera se faltar RAM, se o sistema encerrar
-o processo ou se a GPU compartilhada perder o contexto ou ficar sem VRAM.
+Follow [Build the image engines](#build-the-image-engines) on a fresh clone.
+With the engines ready and Pillow available, start the app.
 
-A configuração de geração é aplicada e gravada ao clicar em **Salvar**.
-Cancelar descarta os ajustes de geração ainda não salvos. As ações da aba
-**Modelos** são aplicadas imediatamente e têm estado próprio.
-Desmarcar a permanência cancela/descarrega imediatamente por segurança, mas a
-preferência só é gravada ao Salvar. O Klein aceita referências; Z-Image gera por texto.
+```bash
+./start.sh
+```
 
-Na primeira abertura sem nenhum conjunto completo, o app abre a aba **Modelos**.
-Escolha **Pasta de download** e baixe um conjunto ou todos; **Localizar existentes**
-adiciona arquivos sem copiá-los. Os cartões mostram disponibilidade, componentes,
-caminhos e o tamanho restante. A pasta escolhida recebe uma subpasta por conjunto.
-Downloads cancelados deixam `.part` para retomada, inclusive após fechar o app.
-SHA-256 e tamanho são conferidos antes de publicar cada arquivo. URLs imutáveis,
-tamanhos e hashes dos padrões estão em `model-downloads.json`. **Verificar** usa os
-arquivos escolhidos no cartão, valida compatibilidade e calcula o SHA-256. Padrões
-confirmados pelo manifesto, fingerprints locais inalterados e arquivos compatíveis
-sem hash de origem conhecido têm resultados distintos. A primeira verificação de
-uma quantização alternativa não comprova sua integridade de origem. Downloads ou
-padrões anteriormente confirmados com hash divergente ficam bloqueados para geração.
-**Remover download** move somente arquivos inalterados registrados pelo app para
-`.popai-trash` na pasta do modelo, onde podem ser recuperados manualmente. Isso não
-libera espaço no disco até essa lixeira ser esvaziada. Importados são preservados.
-Remover uma pasta da biblioteca não apaga seu conteúdo. A biblioteca fica em
-`model-library.json`, separada dos ajustes de geração em `model-settings.json`.
+Open [popAI on your computer](http://127.0.0.1:7860/). To use a different
+port, run `./start.sh --port 7861`. Press **Ctrl+C** in the terminal to stop
+the server and release its engines.
 
-O cálculo do gerador, encoder e VAE usa Vulkan. Os pesos têm offload para RAM,
-carregados na GPU conforme necessário. Não passamos `--max-vram`, não impomos
-reserva percentual nem rejeitamos pesos maiores que a VRAM. O motor respeita a
-memória física disponível; isso não torna a capacidade da GPU ilimitada.
+In **Settings → Models**, choose a download folder and download one model set,
+or use **Find existing models** to import compatible files in place. Each set
+uses a generator, text encoder, and VAE. Download sizes are approximately
+**9.4 GB** for Z-Image Turbo, **7.1 GB** for FLUX.2 Klein 4B, and **9.0 GB** for
+FLUX 3 Image Klein. To add a model directory at launch, pass
+`--model-dir /path/to/models`.
 
-Os três perfis usam a mesma seleção de operações do ggml. Para multiplicações
-Q8_0 × FP32 no caminho escalar, o backend pode usar blocos de 64 × 128 conforme
-o tamanho do subgrupo, os limites de execução e a memória compartilhada que o
-dispositivo informa ao Vulkan.
-Manter carregado reutiliza o processo e o modelo, com pesos que podem ficar na
-RAM; não fixa todos os pesos na VRAM. A compatibilidade Polaris mantém os envios
-Vulkan em 4 nós e sincronizados, como no ajuste local anterior.
+## Using popAI
 
-Se o carregamento ou a geração falhar, o processo é encerrado e o motor
-persistente é descarregado, sem nova tentativa automática. **Ajustar configuração**
-abre a aba Stable Diffusion. A mensagem distingue VRAM, RAM, disco, driver e componentes; confira o ajuste indicado.
-**Cancelar** interrompe o pedido. Desligar a permanência também cancela e libera.
+1. Choose a profile in **Settings → Stable Diffusion** and select a size,
+   aspect ratio, and output resolution in **Resolution**.
+2. Enter a prompt and press **Enter**. With a Klein profile, use **+** to
+   attach reference images and describe the edit.
+3. When the final PNG appears, drag to pan, use the mouse wheel to zoom, or
+   double-click to reset the view. Click the download arrow to save the PNG
+   at its full resolution.
 
-## Melhorar prompt
+| Model | Default steps | Faster presets | Reference editing |
+| --- | ---: | --- | --- |
+| Z-Image Turbo | 9 | 4 or 5 steps | Text only |
+| FLUX.2 Klein 4B | 4 | 2 or 3 steps | Supported |
+| FLUX 3 Image Klein | 16 | 5 or 8 steps | Supported |
 
-O botão de varinha ao lado do input usa **AtomicChat/LFM3-1.7B-Uncensored-GGUF,
-AD-Q4_K_M**. O texto em inglês chega diretamente ao campo, sem gerar uma imagem.
-**Desfazer** restaura o texto anterior; **Cancelar** interrompe o pedido e também
-restaura o original. Falhas e streams incompletos preservam a descrição original.
-O navegador salva o texto e seu único nível de Desfazer num registro conjunto;
-recarregar/reabrir mantém ambos. Edição manual invalida o Desfazer. Uma melhoria
-interrompida mantém o texto e o Desfazer anteriores, sem persistir a saída parcial.
-O prompt interno fica em `prompt-enhancer-system.txt`, sem meta fixa de palavras.
+The generation engine stays loaded between requests. Automatic weight placement
+can use system RAM when GPU memory is limited. The generator produces a base
+image, which the upscaler enlarges to fit the exact output dimensions.
 
-O `llama-server` próprio inicia junto com `./start.sh`, fica carregado na RAM e
-encerra junto com o app. Usa somente CPU (`-ngl 0`, `--device none`), contexto de
-**2048 tokens**, raciocínio desligado e uma sequência por vez. Escuta somente em
-127.0.0.1:8081, com chave interna. Uma porta ocupada não é tomada nem reutilizada;
-falha do melhorador não impede o uso dos geradores de imagem. Se o motor de texto
-cair, clicar novamente em melhorar
-tenta recuperar somente esse motor. Uma falha de carga continua sendo mostrada
-sem um ciclo infinito de novas tentativas. O código do app não
-acrescenta filtros de assunto; o comportamento do modelo não é uma garantia de
-ausência absoluta de recusas.
+The prompt is saved in the browser. Reloading the page draws a new seed and
+restores the current result and reference images while the server is running.
+Hover over the prompt field to reveal **New**, which draws a new seed and clears
+the current result while keeping the prompt and references. Click Download for
+a permanent copy. The server removes temporary images when it shuts down.
 
-O executor e bibliotecas ficam em `backends/llama-cpu/` (cerca de 19 MiB); o modelo,
-em `models/prompt-enhancer/` (1.132.208.000 bytes). Nada é instalado no sistema.
-`python3 tools/setup-prompt-enhancer.py` reproduz o download verificado e a compilação
-CPU usando ferramentas já disponíveis; fontes/intermediários usam uma pasta
-temporária, removida depois. Esta compilação x86-64 requer AVX2, FMA e F16C.
-Revisões, URLs e hashes estão em `prompt-enhancer.json`. O executor tem licença MIT;
-o modelo usa a licença LFM própria, preservada junto aos pesos.
+## Build the image engines
 
-## Imagem e arquivos
+Run these commands from the root of a fresh checkout. The build places the
+engines and downloaded tools inside the project. If Pillow is missing, you
+can use a project-local virtual environment.
 
-O formato anterior continua como padrão: base 960×544 em 16:9. As proporções
-16:9, 9:16, 9:20, 1:1, 4:3 e 3:4 ajustam a base e a saída. Leve usa até 768 px
-no maior lado da base; Padrão usa até 960 px. A base é alinhada a blocos de 16 pixels.
-O seletor de resolução mostra as dimensões finais da proporção escolhida. O Real-ESRGAN amplia em 4× e o executor ajusta à largura
-do preset. O backend recorta somente o pequeno excesso horizontal ou vertical e grava o PNG
-exato em 720p, 900p, 1080p, 1440p, 1800p ou 4K UHD (3840×2160).
-Imagem exibida e download apontam para esse mesmo PNG, sem conversão no navegador.
+```bash
+python3 -m venv tools/local/venv
+source tools/local/venv/bin/activate
+python -m pip install Pillow
+```
 
-Em **Muito leve**, a base tem 256 px no maior lado. O Real-ESRGAN aplica duas
-ampliações 4× com uma única carga dos pesos. Os pixels de 8 bits da primeira
-passagem seguem em memória para a segunda. O ajuste à resolução escolhida
-acontece depois das duas passagens e o ampliador encerra ao terminar.
-O executor local `backends/upscayl-ncnn/upscayl-chain` usa os mesmos pesos,
-GPU e blocos de 128 px do executor original. Quando a compilação encontra a
-libpng no Linux, o executor também grava o PNG diretamente das linhas do recorte
-final. Isso evita uma segunda gravação quando a ampliação excede o preset.
-`./build.sh` prepara essa variante e `./tools/build-upscayl.sh` permite
-recompilá-la à parte. O app detecta os recursos do executável. Versões anteriores
-continuam usando o recorte em Python e, quando necessário, duas chamadas para ampliar.
+Download the pinned CMake and Vulkan headers, the NCNN executor, and the
+Real-ESRGAN weights. The downloader verifies the archives against
+[`sources.json`](sources.json).
 
-**Nenhum PNG novo é salvo automaticamente em `outputs/`.** Bases, referências
-e ampliações são arquivos temporários em uma pasta privada `popai-*` no diretório
-temporário do sistema. Após sucesso, base e ampliação intermediária são removidas.
-A prévia atual fica disponível; a anterior tem uma margem de 60 segundos antes
-da limpeza. Intermediários do pedido corrente são preservados para recuperação;
-pedidos abandonados ao iniciar outro são limpos. Downloads já iniciados usam uma
-cópia dos bytes, sem depender da permanência do arquivo temporário.
-Referências removidas da interface são liberadas; se estiverem em uso, a remoção
-espera a geração terminar. Referências anexadas renovam sua atividade no polling;
-órfãs expiram após uma hora. Ao sair da página há liberação best-effort, preservando
-o cache de navegação Voltar/Avançar. A limpeza ocorre durante o uso, sem nova thread.
-O botão de download salva a
-cópia permanente no destino escolhido pelo navegador, sem gravar uma cópia adicional
-no projeto. PNGs antigos existentes no projeto foram preservados.
+```bash
+python3 - <<'PY'
+import json
+from pathlib import Path
+import sys
 
-`logs/` guarda diagnósticos e `jobs/` guarda metadados dos pedidos;
-`model-settings.json` guarda as configurações. Em falha de ampliação/finalização,
-**Concluir imagem** reaproveita os temporários válidos durante a mesma sessão,
-sem gerar uma imagem nova. Encerrar o servidor remove os temporários; a recuperação
-de novos pedidos não persiste após o encerramento. Atualizar a página oculta a foto.
-Arraste move a visualização, a roda dá zoom no cursor e duplo clique reenquadra;
-o arquivo baixado permanece igual ao PNG final, sem aplicar o zoom da tela.
+sys.path.insert(0, "tools")
+from fetch import fetch
 
-Os executores locais existentes ficam em `backends/`. `./build.sh` é a rotina
-local de recompilação do stable-diffusion.cpp; não há instalação no sistema.
+sources = json.loads(Path("sources.json").read_text())
+downloads = Path("tools/downloads")
+for name in ("cmake-4.5.0-linux-x86_64.tar.gz", "vulkan-headers.tar.gz"):
+    asset = sources["tools"][name]
+    fetch(asset["url"], downloads / name, asset["sha256"])
+for asset in sources["upscaler"]["packages"]:
+    name = asset["url"].rsplit("/", 1)[-1]
+    fetch(asset["url"], downloads / name, asset["sha256"])
+PY
 
-## Modelos oficiais e licenças
+mkdir -p tools/local backends/upscayl-ncnn
+tar -xzf tools/downloads/cmake-4.5.0-linux-x86_64.tar.gz -C tools
+tar -xzf tools/downloads/vulkan-headers.tar.gz -C tools/local
 
-- [Z-Image Turbo](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo): Apache-2.0.
-- [FLUX.2 Klein 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B): Apache-2.0.
-- [FLUX 3 Image Klein](https://huggingface.co/black-forest-labs/flux-3-image-klein#license): FLUX Kommunity License.
+spirv=tools/local/SPIRV-Headers-main
+git init "$spirv"
+git -C "$spirv" fetch --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git 5c6004e758e0c80185ef2cee93ae5c10fa342a5b
+git -C "$spirv" checkout --detach FETCH_HEAD
 
-O executor comum é stable-diffusion.cpp (MIT). Os modelos são componentes do
-backend de geração; o app não é afiliado aos seus autores. O executor de ampliação
-upscayl-ncnn tem licença AGPL-3.0, preservada em `backends/upscayl-ncnn/LICENSE`.
-Ao distribuir os componentes, preservar suas licenças e avisos e cumprir suas
-respectivas condições. O código próprio do popAI usa a licença MIT, disponível em `LICENSE`. As licenças dos modelos e executores permanecem próprias; a licença MIT do app não as substitui.
+upscaler=backends/upscayl-ncnn
+unzip -j tools/downloads/upscayl-bin-20240601-103425-linux.zip '*/upscayl-bin' '*/LICENSE' -d "$upscaler"
+chmod +x "$upscaler/upscayl-bin"
+unzip tools/downloads/realesrgan-ncnn-vulkan-20220424-ubuntu.zip 'models/realesrgan-x4plus.*' -d "$upscaler"
+```
+
+Check out the stable-diffusion.cpp revision, initialize its ggml submodule,
+apply the popAI patches, then build.
+
+```bash
+backend=backends/stable-diffusion.cpp
+git init "$backend"
+git -C "$backend" fetch --depth 1 https://github.com/leejet/stable-diffusion.cpp.git 532d2c15c430a785a712b2d94281f04e733008a4
+git -C "$backend" checkout --detach FETCH_HEAD
+git -C "$backend" submodule update --init --depth 1 ggml
+
+git -C "$backend" apply "$PWD/patches/esrgan-pixel-unshuffle.patch"
+git -C "$backend" apply "$PWD/patches/private-resident-server.patch"
+git -C "$backend" apply "$PWD/patches/esrgan-server-probe.patch"
+
+./build.sh
+```
+
+`./build.sh` also attempts to build the optional NCNN runner for chained
+upscaling and direct PNG output. Set `BUILD_JOBS` to control compilation
+parallelism. If you created a virtual environment, activate it again before
+running `./start.sh` in a new terminal.
+
+## Optional prompt enhancer
+
+Run `python3 tools/setup-prompt-enhancer.py` after preparing the local build
+tools. It downloads the pinned LFM3 1.7B GGUF model (about 1.13 GB) and builds
+the CPU-only llama.cpp server in the project. This build requires AVX2, FMA,
+and F16C. [Prompt enhancer manifest](prompt-enhancer.json)
+
+## Tests
+
+The backend and browser logic tests run without generating images on the GPU.
+
+```bash
+python3 -m unittest discover -s tests -p test_backend.py
+node --test tests/frontend.test.cjs
+```
+
+## License
+
+The popAI source is licensed under the [MIT License](LICENSE).
+The engines and model weights have their own licenses. See the
+[engine sources](sources.json), [image model downloads](model-downloads.json),
+and [prompt model license](models/prompt-enhancer/LICENSE) for upstream details.

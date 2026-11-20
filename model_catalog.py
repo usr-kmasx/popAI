@@ -20,7 +20,7 @@ def inspect(path):
 @functools.lru_cache(maxsize=256)
 def _inspect(path, size, mtime):
     if size < 8:
-        raise ValueError('Cabeçalho incompleto.')
+        raise ValueError('Incomplete header.')
     # Map only the bounded header window; tensor weights are never touched.
     with open(path,'rb') as source, mmap.mmap(source.fileno(),min(size,_LIMIT),access=mmap.ACCESS_READ) as stream:
         position,limit = 0,min(size,_LIMIT)
@@ -28,20 +28,20 @@ def _inspect(path, size, mtime):
             nonlocal position
             end=position+count
             if count<0 or end>limit:
-                raise ValueError('Cabeçalho muito grande ou truncado.')
+                raise ValueError('The header is too large or truncated.')
             result=stream[position:end]
             position=end
             return result
         def skip(count):
             nonlocal position
             if count<0 or position+count>limit:
-                raise ValueError('Cabeçalho muito grande ou truncado.')
+                raise ValueError('The header is too large or truncated.')
             position+=count
         def number(fmt):
             nonlocal position
             decoder=_STRUCTS[fmt]
             if position+decoder.size>limit:
-                raise ValueError('Cabeçalho incompleto.')
+                raise ValueError('Incomplete header.')
             result=decoder.unpack_from(stream,position)[0]
             position+=decoder.size
             return result
@@ -56,7 +56,7 @@ def _inspect(path, size, mtime):
             if kind == 9 and depth < 2:
                 element, count = number('I'), number('Q')
                 if count > 2_000_000:
-                    raise ValueError('Array de metadados inválido.')
+                    raise ValueError('Invalid metadata array.')
                 # Tokenizer arrays are not used to identify image components.
                 # Skip their encoded payload instead of decoding every token.
                 if element in _FORMATS:
@@ -68,33 +68,33 @@ def _inspect(path, size, mtime):
                     for _ in range(count):
                         value(element,depth+1)
                 return None
-            raise ValueError('Tipo GGUF não reconhecido.')
+            raise ValueError('Unrecognized GGUF type.')
         tensors, metadata = {}, {}
         try:
             magic = read(4)
             if magic == b'GGUF':
                 if number('I') not in (2,3):
-                    raise ValueError('Versão GGUF não suportada.')
+                    raise ValueError('Unsupported GGUF version.')
                 count, fields = number('Q'), number('Q')
                 if count > 100_000 or fields > 100_000:
-                    raise ValueError('Contagem GGUF inválida.')
+                    raise ValueError('Invalid GGUF count.')
                 for _ in range(fields):
                     key = string(); metadata[key] = value(number('I'))
                 for _ in range(count):
                     name, dimensions = string(), number('I')
                     if not 1 <= dimensions <= 5:
-                        raise ValueError('Dimensões GGUF inválidas.')
+                        raise ValueError('Invalid GGUF dimensions.')
                     shape = tuple(number('Q') for _ in range(dimensions))
                     kind, offset = number('I'), number('Q')
                     if offset >= size or any(d <= 0 for d in shape):
-                        raise ValueError('Tensor GGUF inválido.')
+                        raise ValueError('Invalid GGUF tensor.')
                     tensors[name] = shape
                 format_name = 'gguf'
             else:
                 position = 0
                 header = json.loads(read(number('Q')))
                 if not isinstance(header, dict):
-                    raise ValueError('Cabeçalho Safetensors inválido.')
+                    raise ValueError('Invalid Safetensors header.')
                 metadata = header.get('__metadata__', {})
                 for name, tensor in header.items():
                     if name == '__metadata__':
@@ -102,13 +102,13 @@ def _inspect(path, size, mtime):
                     shape = tensor.get('shape')
                     offsets = tensor.get('data_offsets')
                     if not isinstance(shape,list) or not isinstance(offsets,list) or len(offsets)!=2 or not 0 <= offsets[0] <= offsets[1] <= size-position:
-                        raise ValueError('Tensor Safetensors inválido.')
+                        raise ValueError('Invalid Safetensors tensor.')
                     tensors[name] = tuple(shape)
                 format_name = 'safetensors'
             if not tensors:
-                raise ValueError('Arquivo sem tensores.')
+                raise ValueError('The file contains no tensors.')
         except (struct.error, UnicodeError, KeyError, TypeError, AttributeError) as exc:
-            raise ValueError('Cabeçalho de modelo inválido.') from exc
+            raise ValueError('Invalid model header.') from exc
     return {'format':format_name, 'metadata':metadata, 'tensors':tensors, 'size':size}
 
 
@@ -158,7 +158,7 @@ def identify(data):
 def diffusion_profile(path, data=None):
     role,family = identify(data or inspect(path))
     if role not in ('diffusion','unknown'):
-        raise ValueError('Escolha um gerador no campo Gerador.')
+        raise ValueError('Select a generator in the Generator field.')
     if family == 'qwen':
         return 'qwen-turbo' if 'turbo' in Path(path).name.lower() else 'qwen'
     return family if family in ('klein','z-image-turbo','flux3-klein') else 'auto'
@@ -175,25 +175,25 @@ def validate(profile, paths):
         try:
             actual = identify(inspect(path))
         except (OSError, ValueError) as exc:
-            raise ValueError(f'Não foi possível identificar {role}: {Path(path).name}. {exc}') from exc
+            raise ValueError(f'Could not identify the {role} component in {Path(path).name}. {exc}') from exc
         if profile == 'auto':
             if actual[0] not in (role,'unknown'):
-                raise ValueError(f'Componente incompatível: {Path(path).name} é {actual[0]}, esperado {role}.')
+                raise ValueError(f'{Path(path).name} is a {actual[0]} component. Select a {role} component.')
             continue
         if actual != (role, expected[role]):
-            raise ValueError(f'Componente incompatível: {Path(path).name} identificado como {actual[0]} / {actual[1]}; esperado {role} / {expected[role]}.')
+            raise ValueError(f'{Path(path).name} was identified as {actual[0]} / {actual[1]}. Select a {role} / {expected[role]} component.')
 
 
 def validate_upscaler(path):
     path = Path(path)
     if path.suffix != '.bin' or path.stat().st_size < 1024:
-        raise ValueError('Pesos NCNN inválidos.')
+        raise ValueError('Invalid NCNN weights.')
     param = path.with_suffix('.param')
     if param.stat().st_size > 2*1024**2:
-        raise ValueError('Arquivo NCNN .param inválido.')
+        raise ValueError('Invalid NCNN .param file.')
     lines = param.read_text().splitlines()
     if len(lines) < 3 or lines[0].strip() != '7767517':
-        raise ValueError('O arquivo .param não é um modelo NCNN válido.')
+        raise ValueError('The .param file is not a valid NCNN model.')
     counts = lines[1].split()
     if len(counts) != 2 or not all(v.isdigit() and int(v)>0 for v in counts):
-        raise ValueError('Cabeçalho NCNN inválido.')
+        raise ValueError('Invalid NCNN header.')

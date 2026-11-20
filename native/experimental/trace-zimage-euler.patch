@@ -1,0 +1,206 @@
+--- /dev/null
++++ b/src/runtime/euler_trace.hpp
+@@ -0,0 +1,52 @@
++#pragma once
++
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++
++#include "ggml.h"
++
++namespace sd::euler_trace {
++struct Step {
++    int64_t upload_us = 0;
++    size_t upload_bytes = 0;
++    int64_t readback_us = 0;
++    size_t readback_bytes = 0;
++    int64_t gpu_wait_us = 0;
++    int64_t final_sync_us = 0;
++    int64_t scale_us = 0;
++    int64_t combine_us = 0;
++    int64_t preview_us = 0;
++    const void* latent = nullptr;
++};
++
++inline thread_local Step* active = nullptr;
++
++class Timer {
++    int64_t* target_ = nullptr;
++    int64_t start_ = 0;
++
++public:
++    explicit Timer(int64_t Step::*field, bool measure = true) {
++        if (measure && active != nullptr) {
++            target_ = &(active->*field);
++            start_ = ggml_time_us();
++        }
++    }
++    Timer(const Timer&) = delete;
++    Timer& operator=(const Timer&) = delete;
++    ~Timer() {
++        if (target_ != nullptr) {
++            *target_ += ggml_time_us() - start_;
++        }
++    }
++};
++
++class Scope {
++    Step* previous_;
++
++public:
++    explicit Scope(Step* step) : previous_(active) { active = step; }
++    ~Scope() { active = previous_; }
++};
++}  // namespace sd::euler_trace
+--- a/src/runtime/denoiser.hpp
++++ b/src/runtime/denoiser.hpp
+@@ -20,6 +20,7 @@
+ #include "core/tensor.hpp"
+ #include "core/util.h"
+ #include "model.h"
++#include "runtime/euler_trace.hpp"
+ #include "runtime/gits_noise.h"
+ #include "runtime/guidance.h"
+ 
+@@ -1875,19 +1876,37 @@
+ static sd::Tensor<float> sample_euler(denoise_cb_t model,
+                                       sd::Tensor<float> x,
+                                       const std::vector<float>& sigmas) {
++    const bool trace = std::getenv("POPAI_TRACE_EULER") != nullptr;
+     int steps = static_cast<int>(sigmas.size()) - 1;
+     for (int i = 0; i < steps; i++) {
+         float sigma = sigmas[i];
+         if (sigma == sigmas[i + 1]) {
+             continue;
+         }
++        sd::euler_trace::Step timings;
++        sd::euler_trace::Scope trace_scope(trace ? &timings : nullptr);
++        const int64_t step_start = trace ? ggml_time_us() : 0;
+         auto denoised_opt = model(x, sigma, i + 1);
+         if (denoised_opt.pred.empty()) {
+             return {};
+         }
+-        sd::Tensor<float> denoised = std::move(denoised_opt.pred);
+-        sd::Tensor<float> d        = (x - denoised) / sigma;
+-        x += d * (sigmas[i + 1] - sigma);
++        const int64_t update_start = trace ? ggml_time_us() : 0;
++        {
++            sd::Tensor<float> denoised = std::move(denoised_opt.pred);
++            sd::Tensor<float> d        = (x - denoised) / sigma;
++            x += d * (sigmas[i + 1] - sigma);
++        }
++        if (trace) {
++            const int64_t end = ggml_time_us();
++            std::fprintf(stderr,
++                         "\n[popai-euler] step=%d total_us=%lld gpu_wait_us=%lld final_sync_us=%lld "
++                         "readback_us=%lld readback_bytes=%zu update_us=%lld upload_us=%lld upload_bytes=%zu "
++                         "scale_us=%lld combine_us=%lld preview_us=%lld\n",
++                         i + 1, (long long)(end - step_start), (long long)timings.gpu_wait_us,
++                         (long long)timings.final_sync_us, (long long)timings.readback_us, timings.readback_bytes,
++                         (long long)(end - update_start), (long long)timings.upload_us, timings.upload_bytes,
++                         (long long)timings.scale_us, (long long)timings.combine_us, (long long)timings.preview_us);
++        }
+     }
+     return x;
+ }
+--- a/src/pipeline/diffusion_engine.cpp
++++ b/src/pipeline/diffusion_engine.cpp
+@@ -2535,7 +2535,14 @@
+             GGML_ASSERT(target_index > 0 && target_index < sigmas.size());
+             flux3_target_timestep = sd::Tensor<float>::from_vector({sigmas[target_index]});
+         }
+-        sd::Tensor<float> noised_input = x * c_in;
++        sd::Tensor<float> noised_input;
++        {
++            sd::euler_trace::Timer timer(&sd::euler_trace::Step::scale_us);
++            noised_input = x * c_in;
++        }
++        if (sd::euler_trace::active != nullptr) {
++            sd::euler_trace::active->latent = noised_input.data();
++        }
+         if (apply_denoise_mask && (version == VERSION_WAN2_2_TI2V || sd_version_is_ltxav(version) || sd_version_is_lingbot_video(version))) {
+             noised_input = noised_input * denoise_mask + sampling_init_latent * (1.0f - denoise_mask);
+         }
+@@ -2903,7 +2910,10 @@
+             return {};
+         }
+ 
+-        denoised = guided.pred * c_out + x * c_skip;
++        {
++            sd::euler_trace::Timer timer(&sd::euler_trace::Step::combine_us);
++            denoised = guided.pred * c_out + x * c_skip;
++        }
+         sd::guidance::GuiderOutput output;
+         output.pred = denoised;
+         if (needs_uncond_denoised) {
+@@ -2919,6 +2929,7 @@
+             denoised = denoised * denoise_mask + sampling_init_latent * (1.0f - denoise_mask);
+         }
+         if (preview_needed && sd_should_preview_denoised()) {
++            sd::euler_trace::Timer timer(&sd::euler_trace::Step::preview_us);
+             preview_image(step, denoised, version, preview.mode, preview.callback, preview.data, false);
+         }
+         report_sample_progress(step, steps, terminal_sigma_is_zero, &last_progress_us);
+--- a/src/core/execution_engine.cpp
++++ b/src/core/execution_engine.cpp
+@@ -13,6 +13,7 @@
+ #include "core/segment_weight_pipeline.h"
+ #include "core/tensor_ggml.hpp"
+ #include "core/util.h"
++#include "runtime/euler_trace.hpp"
+ 
+ std::shared_ptr<sd::ExecutionEngine> DeviceResidencyManager::execution_engine() {
+     if (execution_engine_ == nullptr) {
+@@ -221,6 +222,11 @@
+             return {};
+         }
+ 
++        const bool trace = task_.description == "z_image" && euler_trace::active != nullptr;
++        if (trace && !ggml_backend_buffer_is_host(buf)) {
++            euler_trace::active->readback_bytes += ggml_nbytes(tensor);
++        }
++        euler_trace::Timer timer(&euler_trace::Step::readback_us, trace);
+         return sd::make_sd_tensor_from_ggml<float>(tensor);
+     }
+ 
+@@ -271,6 +277,11 @@
+                 continue;
+             }
+ 
++            const bool trace = euler_trace::active != nullptr && euler_trace::active->latent == data;
++            if (trace && !ggml_backend_buffer_is_host(buf)) {
++                euler_trace::active->upload_bytes += ggml_nbytes(tensor);
++            }
++            euler_trace::Timer timer(&euler_trace::Step::upload_us, trace);
+             ggml_backend_tensor_set(tensor, data, 0, ggml_nbytes(tensor));
+         }
+     }
+@@ -473,7 +484,10 @@
+         on_before_compute();
+         const auto status = ggml_backend_sched_graph_compute_async(scheduler, graph);
+ #endif
+-        session_.workspace_.synchronize();
++        {
++            euler_trace::Timer timer(&euler_trace::Step::gpu_wait_us, task_.description == "z_image");
++            session_.workspace_.synchronize();
++        }
+         if (status != GGML_STATUS_SUCCESS) {
+             last_compute_status_ = status;
+             LOG_ERROR("%s compute failed: %s", task_.description.c_str(), ggml_status_to_string(status));
+@@ -715,7 +729,14 @@
+                     }
+                 }
+             }
+-            if (!session_.workspace_.segment_end()) {
++            const int64_t sync_start = last && task_.description == "z_image" && euler_trace::active != nullptr
++                                           ? ggml_time_us()
++                                           : 0;
++            const bool synchronized = session_.workspace_.segment_end();
++            if (sync_start != 0) {
++                euler_trace::active->final_sync_us += ggml_time_us() - sync_start;
++            }
++            if (!synchronized) {
+                 last_compute_status_ = GGML_STATUS_FAILED;
+                 return fail_segment("workspace synchronization");
+             }

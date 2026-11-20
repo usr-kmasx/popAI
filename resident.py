@@ -66,8 +66,8 @@ class ResidentEngine:
             except (ValueError, OSError):
                 detail = str(exc)
             if self.log:
-                raise native_failure(self.log,'o pedido',detail=str(detail),offset=self.log_start) from exc
-            raise RuntimeError(f'O motor persistente recusou o pedido: {detail}') from exc
+                raise native_failure(self.log,'request processing',detail=str(detail),offset=self.log_start) from exc
+            raise RuntimeError(f'The persistent engine rejected the request: {detail}') from exc
 
     def ensure(self, command, env, root, log, vision, check):
         self.log = log
@@ -100,7 +100,7 @@ class ResidentEngine:
         while True:
             check()
             if process.poll() is not None:
-                raise native_failure(log,'o carregamento',process.returncode,offset=self.log_start)
+                raise native_failure(log,'model loading',process.returncode,offset=self.log_start)
             try:
                 state = self.request('/sdcpp/v1/models/status', timeout=1)
                 if state.get('state') == 'ready':
@@ -111,7 +111,7 @@ class ResidentEngine:
                             self.signature = signature
                             return
                 if state.get('state') == 'error':
-                    raise native_failure(log,'o carregamento',detail=str(state.get('error','')),offset=self.log_start)
+                    raise native_failure(log,'model loading',detail=str(state.get('error','')),offset=self.log_start)
             except (URLError, TimeoutError, ConnectionError):
                 pass
             time.sleep(.2)
@@ -123,7 +123,7 @@ class ResidentEngine:
         if profile['schedule'][:1] == ['--scheduler']:
             sample['scheduler'] = profile['schedule'][1]
         if profile['schedule'][:1] == ['--sigmas']:
-            sample['custom_sigmas'] = [1., .978453, .95418, .926626, .89508, .845148, .704534, .414568, 0.]
+            sample['custom_sigmas'] = [float(value) for value in profile['schedule'][1].split(',')]
         check()
         submitted = self.request('/sdcpp/v1/img_gen', {
             'prompt': prompt, 'width': width, 'height': height, 'seed': seed,
@@ -154,6 +154,6 @@ class ResidentEngine:
                 output.write_bytes(base64.b64decode(state['result']['images'][0]['b64_json'], validate=True))
                 return
             if state['status'] in {'failed', 'cancelled'}:
-                raise native_failure(self.log,'a geração',detail=str(state.get('error') or state['status']),offset=self.log_start)
+                raise native_failure(self.log,'image generation',detail=str(state.get('error') or state['status']),offset=self.log_start)
             time.sleep(.3)
 

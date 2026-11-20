@@ -11,6 +11,7 @@ import time
 import unittest
 from unittest.mock import patch
 from app_config import SettingsStore
+from catalog import MODEL_DEFAULTS, SD_DEFAULTS, generation_profile
 import urllib.error
 import urllib.request
 import zlib
@@ -78,7 +79,7 @@ png += chunk(b'IDAT', zlib.compress((b'\\0' + bytes([16, 32, 48])*width)*height)
 out.write_bytes(png if prompt != 'invalid' else b'broken')
 ''')
         self.executable.chmod(0o755)
-        self.manager = GenerationManager(self.executable, self.model_dir, self.root / 'outputs', self.root / 'logs', upscale_model=self.upscaler,store=SettingsStore(self.root))
+        self.manager = GenerationManager(self.executable, self.model_dir, self.root / 'outputs', self.root / 'logs', upscale_model=self.upscaler,store=SettingsStore(self.root),keep_loaded=False)
         self.manager.upscale_executable = self.executable
         self.patches = [patch('server.model_catalog.validate'),patch('server.hardware.discover',return_value=[dict(index=0,name='RADV POLARIS10',type=2,total=8*1024**3,free=7*1024**3,usable=True,ggml='Vulkan0')])]
         for item in self.patches: item.start()
@@ -141,6 +142,94 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
         self.assertEqual(up_args[up_args.index('-i')+1], args[args.index('-o')+1])
         self.assertEqual(len(self.executable.with_suffix('.calls').read_text().splitlines()), 2)
 
+    def test_zimage_presets_keep_the_requested_seed_and_use_their_own_schedule(self):
+        settings = self.manager.model_settings()
+        presets = [
+            ('z-image-4', '4', [1.0, .9001200199127197, .62, .22, 0.0]),
+            ('z-image-5', '5', [1.0, .9001200199127197, .7503749132156372, .5009990334510803, .22, 0.0]),
+            ('default', '9', None),
+            ('custom', '9', None),
+        ]
+        for preset, steps, sigmas in presets:
+            with self.subTest(preset=preset):
+                self.manager.configure({**settings, 'sd_profile': preset}, persist=True)
+                self.assertEqual(self.manager.store.load()['sd_profile'], preset)
+                self.manager.start('Rio com dois pescadores', seed=0)
+                self.assertEqual(self.wait_job()['state'], 'done')
+                args = json.loads(self.executable.with_suffix('.args').read_text())
+                self.assertEqual(args[args.index('--seed') + 1], '0')
+                self.assertEqual(args[args.index('--steps') + 1], steps)
+                if sigmas is None:
+                    self.assertNotIn('--sigmas', args)
+                else:
+                    self.assertEqual([float(v) for v in args[args.index('--sigmas') + 1].split(',')], sigmas)
+        for invalid in (-1, 2**31, True, 2.5, '17'):
+            with self.subTest(seed=invalid), self.assertRaises(ValueError):
+                self.manager.start('Rio com dois pescadores', seed=invalid)
+
+    def test_previous_five_step_setting_selects_the_new_preset(self):
+        settings = {**self.manager.model_settings(), 'experimental_five_steps': True}
+        configured = self.manager.configure(settings, persist=True)
+        self.assertEqual(configured['sd_profile'], 'z-image-5')
+        self.assertNotIn('experimental_five_steps', self.manager.store.load())
+
+    def test_klein_presets_pass_their_expected_schedules(self):
+        settings = {**self.manager.model_settings(), 'profile': 'klein', 'sd_profile': 'klein-3'}
+        for role, name in MODEL_DEFAULTS['klein'].items():
+            path = self.model_dir / name
+            path.touch()
+            settings[role] = str(path)
+        configured = self.manager.configure(settings, persist=True)
+        self.assertEqual(configured['profile'], 'klein')
+        self.assertEqual(self.manager.store.load()['sd_profile'], 'klein-3')
+        self.manager.start('Retrato na oficina')
+        self.assertEqual(self.wait_job()['state'], 'done')
+        args = json.loads(self.executable.with_suffix('.args').read_text())
+        self.assertEqual(args[args.index('--steps') + 1], '3')
+        actual = [float(v) for v in args[args.index('--sigmas') + 1].split(',')]
+        self.assertEqual(len(actual), 4)
+        for value, expected in zip(actual, (1.0, .89252933, .73462751, 0.0)):
+            self.assertAlmostEqual(value, expected, places=7)
+
+        portrait = generation_profile(SD_DEFAULTS['klein-3'], 'klein', sd_profile='klein-3',
+                                      base_size=(576, 768))
+        actual = [float(v) for v in portrait['schedule'][1].split(',')]
+        for value, expected in zip(actual, (1.0, .889965177, .729438007, 0.0)):
+            self.assertAlmostEqual(value, expected, places=7)
+
+        self.manager.configure({**settings, 'sd_profile': 'klein-2'}, persist=True)
+        self.assertEqual(self.manager.store.load()['sd_profile'], 'klein-2')
+        self.manager.start('Retrato na oficina')
+        self.assertEqual(self.wait_job()['state'], 'done')
+        args = json.loads(self.executable.with_suffix('.args').read_text())
+        self.assertEqual(args[args.index('--steps') + 1], '2')
+        self.assertEqual(args[args.index('--sigmas') + 1], '1.0,0.87,0.0')
+
+        portrait = generation_profile(SD_DEFAULTS['klein-2'], 'klein', sd_profile='klein-2',
+                                      base_size=(576, 768))
+        self.assertEqual(portrait['schedule'], ['--sigmas', '1.0,0.87,0.0'])
+
+        self.manager.configure({**settings, 'sd_profile': 'klein'})
+        self.manager.start('Retrato na oficina')
+        self.assertEqual(self.wait_job()['state'], 'done')
+        args = json.loads(self.executable.with_suffix('.args').read_text())
+        self.assertEqual(args[args.index('--steps') + 1], '4')
+        self.assertNotIn('--sigmas', args)
+
+    def test_cli_progress_ignores_progress_bars_outside_sampling(self):
+        state = {'id': 'cli-progress'}
+        log = self.manager.logs / 'cli-progress.log'
+        log.write_text('1/2 - 3.00s/it\n')
+        self.assertIsNone(self.manager._cli_progress(state))
+
+        with log.open('a') as stream:
+            stream.write('[I] generating image: 1/1 - seed 42\n1/4 - 2.00s/it\n')
+        self.assertEqual(self.manager._cli_progress(state)['total'], 4)
+
+        with log.open('a') as stream:
+            stream.write('[I] sampling completed, taking 8.00s\n1/2 - 1.00s/it\n')
+        self.assertEqual(self.manager._cli_progress(state)['stage'], 'vae_decode')
+
     def test_failed_generation_does_not_start_upscaler(self):
         self.manager.start('fail')
         self.assertEqual(self.wait_job()['state'], 'error')
@@ -185,7 +274,7 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
         self.manager.start('device_lost')
         state = self.wait_job()
         self.assertEqual(state['state'], 'error')
-        self.assertIn('contexto Vulkan', state['error'])
+        self.assertIn('lost its Vulkan context', state['error'])
         self.assertIn('logs/', state['error'])
         self.assertIsNone(state['image'])
         self.manager.start('landscape')
@@ -217,7 +306,7 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
 
     def test_zimage_rejects_editing_and_next_text_request_still_works(self):
         saved = self.manager.store_reference(reference_png())
-        with self.assertRaisesRegex(ValueError, 'somente por texto'):
+        with self.assertRaisesRegex(ValueError, 'only supports text-to-image'):
             self.manager.start('change the sky', saved['id'])
         self.manager.start('new landscape')
         self.assertEqual(self.wait_job()['state'], 'done')
@@ -283,7 +372,7 @@ server.model_catalog.validate=lambda *args:None
 binary=Path(sys.argv[2])
 original=server.GenerationManager.__init__
 def init(self, executable, *a, **kw):
-    original(self,binary,*a,**kw)
+    original(self,binary,*a,keep_loaded=False,**kw)
 server.GenerationManager.__init__=init
 sys.argv=['server.py','--port','0','--model-dir',sys.argv[3],'--upscale-model',sys.argv[4]]
 server.main()
@@ -328,9 +417,10 @@ server.main()
                 saved = json.load(response)
             with urllib.request.urlopen(base + saved['image']) as response:
                 self.assertEqual(response.read(), reference_png())
-            request = urllib.request.Request(base + '/api/generate', data=json.dumps({'prompt':'landscape'}).encode(), headers={'Content-Type':'application/json'})
+            request = urllib.request.Request(base + '/api/generate', data=json.dumps({'prompt':'landscape', 'seed': 7041}).encode(), headers={'Content-Type':'application/json'})
             with urllib.request.urlopen(request) as response:
                 self.assertEqual(response.status, 202)
+                self.assertEqual(json.load(response)['seed'], 7041)
             state = self.wait_job()
             with urllib.request.urlopen(base + state['image']) as response:
                 self.assertEqual(response.headers['Content-Type'], 'image/png')

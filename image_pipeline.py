@@ -24,22 +24,22 @@ def validate_image(path, dimensions):
         signature = _signature(path)
         with Image.open(path) as image:
             if image.format != 'PNG' or image.size != tuple(dimensions):
-                raise ValueError('Formato ou dimensões incorretos.')
+                raise ValueError('Incorrect image format or dimensions.')
             image.verify()
         with Image.open(path) as image:
             image.load()
         if _signature(path) != signature:
-            raise ValueError('A imagem mudou durante a validação.')
+            raise ValueError('The image changed during validation.')
         return ValidatedImage(Path(path).absolute(), tuple(dimensions), signature)
     except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as exc:
-        raise RuntimeError(f'O backend não produziu uma imagem PNG válida em {dimensions[0]}×{dimensions[1]}.') from exc
+        raise RuntimeError(f'The backend did not produce a valid {dimensions[0]}×{dimensions[1]} PNG image.') from exc
 
 
 def crop_box(source_dimensions, dimensions, max_crop):
     width, height = dimensions
     src_width, src_height = source_dimensions
     if not width <= src_width <= width + max_crop or not height <= src_height <= height + max_crop:
-        raise ValueError('Dimensões incompatíveis com o recorte final.')
+        raise ValueError('The image dimensions are incompatible with the final crop.')
     left, top = (src_width - width) // 2, (src_height - height) // 2
     return left, top, left + width, top + height
 

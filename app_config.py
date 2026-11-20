@@ -26,14 +26,14 @@ def portable_path(value, root=APP_ROOT):
 
 def normalize_roots(values, root=APP_ROOT):
     if not isinstance(values, list) or not values or len(values) > 32:
-        raise ValueError('Informe de uma a 32 pastas de modelos.')
+        raise ValueError('Enter between 1 and 32 model folders.')
     result = []
     for value in values:
         if not isinstance(value, str) or not value.strip() or '\0' in value:
-            raise ValueError('Pasta de modelos inválida.')
+            raise ValueError('Invalid model folder.')
         path = local_path(value.strip(), root)
         if path.exists() and not path.is_dir():
-            raise ValueError(f'Não é uma pasta: {path}')
+            raise ValueError(f'This path is not a folder: {path}')
         if path not in result:
             result.append(path)
     return result
@@ -49,17 +49,17 @@ class SettingsStore:
             with tempfile.TemporaryFile(dir=self.root):
                 pass
         except OSError as exc:
-            raise OSError('A pasta do app não permite gravação. Mova o app para uma pasta onde você possa salvar arquivos.') from exc
+            raise OSError('The app folder is read-only. Move the app to a folder where you can save files.') from exc
 
     def load(self):
         if not self.path.exists():
             return {}
         data = json.loads(self.path.read_text(encoding='utf-8'))
         if not isinstance(data, dict):
-            raise ValueError('A configuração salva não é um objeto válido.')
+            raise ValueError('The saved settings are not a valid object.')
         version = data.get('schema_version', 1)
         if version not in (1, 2):
-            raise ValueError('Esta configuração pertence a uma versão mais nova do app.')
+            raise ValueError('These settings are from a newer version of the app.')
         if version == 1:
             roots = []
             for key in COMPONENTS:

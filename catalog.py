@@ -1,15 +1,17 @@
 """Single source of profile defaults and output presets for API and UI."""
+import math
+
 RESOLUTIONS = {'720p': (1280,720), '900p': (1600,900), '1080p': (1920,1080),
                '1440p': (2560,1440), '1800p': (3200,1800), '2160p': (3840,2160)}
 ASPECT_RATIOS = {'16:9':(16,9), '9:16':(9,16), '9:20':(9,20),
                  '1:1':(1,1), '4:3':(4,3), '3:4':(3,4)}
 GENERATION_SIZES = {'standard':960,'light':768,'very-light':256,'high':1280,'very-high':1536}
-GENERATION_SIZE_LABELS = {'standard':'Padrão','light':'Leve','very-light':'Muito leve','high':'Alto','very-high':'Muito alto'}
+GENERATION_SIZE_LABELS = {'standard':'Standard','light':'Light','very-light':'Very Light','high':'High','very-high':'Very High'}
 
 
 def image_geometry(resolution, aspect_ratio='16:9', generation_size='standard'):
     if resolution not in RESOLUTIONS or aspect_ratio not in ASPECT_RATIOS or generation_size not in GENERATION_SIZES:
-        raise ValueError('Resolução, proporção ou tamanho de geração inválido.')
+        raise ValueError('Invalid resolution, aspect ratio, or generation size.')
     x,y = ASPECT_RATIOS[aspect_ratio]
     edge = max(RESOLUTIONS[resolution])
     width,height = (edge,round(edge*y/x)) if x>=y else (round(edge*x/y),edge)
@@ -31,7 +33,38 @@ PROFILES = {
 }
 SD_DEFAULT = {'steps':9, 'cfg':1.0, 'sampler':'euler', 'scheduler':'auto',
               'vae_tiling':True, 'vae_tile_size':0, 'mmap':True}
-SD_DEFAULTS = {'default':dict(SD_DEFAULT), 'klein':{**SD_DEFAULT,'steps':4,'scheduler':'flux2'}, 'flux3-klein':{**SD_DEFAULT,'steps':16,'scheduler':'discrete'}}
+# The final model evaluation in both short Z-Image schedules starts at 0.22.
+Z_IMAGE_PRESET_SIGMAS = {
+    'z-image-4': (1.0, 0.9001200199127197, 0.62, 0.22, 0.0),
+    'z-image-5': (1.0, 0.9001200199127197, 0.7503749132156372, 0.5009990334510803, 0.22, 0.0),
+}
+# Selected points of the native 16-step discrete schedule, followed by zero.
+FLUX3_PRESET_SIGMAS = {
+    # 1, 3, 7, 11, 16
+    'flux3-klein-5': (1.0, 0.979802072, 0.920318604, 0.806126416, 0.316005468, 0.0),
+    # 1, 3, 7, 11, 13, 14, 15, 16
+    'flux3-klein-8': (1.0, 0.979802072, 0.920318604, 0.806126416, 0.697885156,
+                      0.615270734, 0.497487426, 0.316005468, 0.0),
+}
+SD_DEFAULTS = {
+    'default': dict(SD_DEFAULT),
+    **{key: {**SD_DEFAULT, 'steps': len(sigmas) - 1} for key, sigmas in Z_IMAGE_PRESET_SIGMAS.items()},
+    'klein': {**SD_DEFAULT, 'steps': 4, 'scheduler': 'flux2'},
+    'klein-3': {**SD_DEFAULT, 'steps': 3, 'scheduler': 'flux2'},
+    'klein-2': {**SD_DEFAULT, 'steps': 2, 'scheduler': 'flux2'},
+    'flux3-klein': {**SD_DEFAULT, 'steps': 16, 'scheduler': 'discrete'},
+    **{key: {**SD_DEFAULT, 'steps': len(sigmas) - 1, 'scheduler': 'discrete'}
+       for key, sigmas in FLUX3_PRESET_SIGMAS.items()},
+}
+SD_PROFILE_FAMILIES = {
+    'default': 'z-image-turbo',
+    **dict.fromkeys(Z_IMAGE_PRESET_SIGMAS, 'z-image-turbo'),
+    'klein': 'klein',
+    'klein-3': 'klein',
+    'klein-2': 'klein',
+    'flux3-klein': 'flux3-klein',
+    **dict.fromkeys(FLUX3_PRESET_SIGMAS, 'flux3-klein'),
+}
 MODEL_DEFAULTS = {'z-image-turbo':{'diffusion':'z_image_turbo-Q8_0.gguf','encoder':'Qwen3-4B-Instruct-2507-Q4_K_M.gguf','vae':'ae.safetensors'}, 'klein':{'diffusion':'flux-2-klein-4b-Q8_0.gguf','encoder':'Qwen3-4B-Q4_K_M.gguf','vae':'flux2-vae.safetensors'}}
 CUSTOM_DEFAULTS = {'z-image-turbo':dict(SD_DEFAULT), 'klein':dict(SD_DEFAULTS['klein'])}
 MODEL_DEFAULTS['flux3-klein'] = {'diffusion':'flux3-image-klein-Q8_0.gguf','encoder':'Qwen3VL-4B-Instruct-Q4_K_M.gguf','vae':'flux2-vae.safetensors'}
@@ -45,28 +78,51 @@ SCHEDULERS = ('auto','discrete','karras','exponential','simple','sgm_uniform','f
 
 
 def normalize_sd(settings):
-    import math
     if isinstance(settings,dict):
         settings = {key:value for key,value in settings.items() if key != 'seed'}
     if not isinstance(settings,dict) or set(settings)-set(SD_DEFAULT):
-        raise ValueError('Ajustes de Stable Diffusion inválidos.')
+        raise ValueError('Invalid Stable Diffusion settings.')
     result = {**SD_DEFAULT,**settings}
     if type(result['steps']) is not int or not 1 <= result['steps'] <= 150:
-        raise ValueError('Use de 1 a 150 passos.')
+        raise ValueError('Use between 1 and 150 steps.')
     if type(result['cfg']) not in (float,int) or not math.isfinite(result['cfg']) or not 0 <= result['cfg'] <= 30:
-        raise ValueError('CFG deve estar entre 0 e 30.')
+        raise ValueError('CFG must be between 0 and 30.')
     if result['sampler'] not in SAMPLERS or result['scheduler'] not in SCHEDULERS:
-        raise ValueError('Sampler ou scheduler inválido.')
+        raise ValueError('Invalid sampler or scheduler.')
     if any(type(result[k]) is not bool for k in ('vae_tiling','mmap')):
-        raise ValueError('Ative ou desative mmap e VAE em blocos.')
+        raise ValueError('Choose whether to enable mmap and VAE tiling.')
     tile = result['vae_tile_size']
     if type(tile) is not int or tile != 0 and (not 64 <= tile <= 2048 or tile % 64):
-        raise ValueError('Tile do VAE: automático (0) ou múltiplo de 64 entre 64 e 2048.')
+        raise ValueError('Set the VAE tile size to Auto (0) or a multiple of 64 between 64 and 2048.')
     return result
 
 
-def generation_profile(settings, family="z-image-turbo"):
+def _klein_last_two_sigmas(width, height):
+    # Match Flux2Scheduler::compute_empirical_mu for four evaluations.
+    tokens = (width // 16) * (height // 16)
+    mu_200 = 0.00016927 * tokens + 0.45666666
+    mu = mu_200
+    if tokens <= 4300:
+        mu_10 = 0.0000873809524 * tokens + 1.89833333
+        mu += (200 - 4) * (mu_10 - mu_200) / 190
+    shifted = math.exp(mu)
+    # The third and fourth evaluations use t = 0.5 and t = 0.25.
+    return shifted / (shifted + 1.0), shifted / (shifted + 3.0)
+
+
+def generation_profile(settings, family="z-image-turbo", *, sd_profile=None, base_size=None):
     result = {**PROFILES[family],**settings}
     result['steps'],result['cfg'] = str(settings['steps']),str(settings['cfg'])
     result['schedule'] = [] if settings['scheduler']=='auto' else ['--scheduler',settings['scheduler']]
+    sigmas = Z_IMAGE_PRESET_SIGMAS.get(sd_profile) if family == 'z-image-turbo' else None
+    if family == 'klein':
+        if sd_profile == 'klein-3':
+            third, fourth = _klein_last_two_sigmas(*base_size)
+            sigmas = (1.0, third, fourth, 0.0)
+        elif sd_profile == 'klein-2':
+            sigmas = (1.0, 0.87, 0.0)
+    elif family == 'flux3-klein':
+        sigmas = FLUX3_PRESET_SIGMAS.get(sd_profile)
+    if sigmas is not None:
+        result['schedule'] = ['--sigmas', ','.join(map(str, sigmas))]
     return result

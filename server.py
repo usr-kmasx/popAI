@@ -40,7 +40,7 @@ DEFAULT_MODEL_DIR = ROOT / 'models'
 NCNN_EXECUTABLE = ROOT / 'backends/upscayl-ncnn/upscayl-bin'
 DEFAULT_UPSCALER = ROOT / 'backends/upscayl-ncnn/models/realesrgan-x4plus.bin'
 from catalog import ASPECT_RATIOS, GENERATION_SIZES, image_geometry, PROFILES, RESOLUTIONS, SD_DEFAULT, SD_DEFAULTS, CUSTOM_DEFAULTS, MODEL_DEFAULTS, SAMPLERS, SCHEDULERS, normalize_sd, generation_profile
-from catalog import GENERATION_SIZE_LABELS, component_family
+from catalog import GENERATION_SIZE_LABELS, SD_PROFILE_FAMILIES, component_family
 MODEL_FILES = {
     'diffusion': 'z_image_turbo-Q8_0.gguf',
     'encoder': 'Qwen3-4B-Instruct-2507-Q4_K_M.gguf',
@@ -76,13 +76,12 @@ def _encoded_size(job):
 
 
 class GenerationManager:
-    def __init__(self, executable, model_dir, outputs, logs, upscale_model=DEFAULT_UPSCALER, model_roots=None, store=None):
+    def __init__(self, executable, model_dir, outputs, logs, upscale_model=DEFAULT_UPSCALER, model_roots=None, store=None, *, keep_loaded=True):
         self.executable = Path(executable).resolve()
         self.model_dir = Path(model_dir).resolve()
         self.model_roots = normalize_roots(model_roots or [str(self.model_dir)])
         self.store = store or SettingsStore(ROOT)
         self.library = ModelLibrary(self.store.root, self.model_roots)
-        self.hardware = dict(HARDWARE_DEFAULTS)
         self.config_error = None
         self.resident_policy = None
         self.model = self.model_dir / MODEL_FILES['diffusion']
@@ -103,7 +102,7 @@ class GenerationManager:
         self.operation_lock = threading.RLock()
         self.cancel_event = threading.Event()
         self.resident = ResidentEngine()
-        self.keep_loaded = False
+        self.keep_loaded = keep_loaded
         self.adaptive_weights = False
         self.resolution = '1080p'
         self.aspect_ratio = '16:9'
@@ -132,7 +131,7 @@ class GenerationManager:
             return
         self.job = saved
         if saved['state'] == 'running':
-            saved.update(state='error', phase='interrupted', error='O app foi encerrado antes de concluir o pedido.', finished=time.time())
+            saved.update(state='error', phase='interrupted', error='The app closed before the job finished.', finished=time.time())
         saved['retryable'] = self._recoverable(saved)
         self.jobs.save(saved)
 
@@ -188,7 +187,7 @@ class GenerationManager:
 
     def touch_references(self, identities):
         if not isinstance(identities,list) or len(identities)>10 or any(not isinstance(i,str) or not REFERENCE_ID.fullmatch(i) for i in identities):
-            raise ValueError('Lista de referências inválida.')
+            raise ValueError('Invalid reference image list.')
         with self.lock:
             missing=[]
             for identity in identities:
@@ -199,7 +198,7 @@ class GenerationManager:
 
     def release_references(self, identities):
         if not isinstance(identities,list) or len(identities)>128 or any(not isinstance(i,str) or not REFERENCE_ID.fullmatch(i) for i in identities):
-            raise ValueError('Lista de referências inválida.')
+            raise ValueError('Invalid reference image list.')
         with self.operation_lock,self.lock:
             self.reference_released.update(identities)
             self._prune_temporary_locked()
@@ -253,12 +252,12 @@ class GenerationManager:
     def retry_finalize(self, identity):
         with self.operation_lock:
             if self.enhancer.status()['busy']:
-                raise RuntimeError('Aguarde o prompt terminar de melhorar.')
+                raise RuntimeError('Wait for prompt enhancement to finish.')
             with self.lock:
                 if self.closed or self.job['state'] == 'running':
-                    raise RuntimeError('Aguarde o pedido atual terminar.')
+                    raise RuntimeError('Wait for the current job to finish.')
                 if self.job.get('id') != identity or not self._recoverable(self.job):
-                    raise ValueError('Não há uma imagem base válida para concluir este pedido.')
+                    raise ValueError('This job has no valid base image to finish.')
                 if self.job.get('artifacts_version')!=2:
                     old_paths=self._artifact_paths(self.job)
                     directory=self.workspace/'jobs'/identity
@@ -287,7 +286,7 @@ class GenerationManager:
                     'vision': str(self.vision) if self.vision else '', 'keep_loaded': self.keep_loaded,
                     'adaptive_weights': self.adaptive_weights,
                     'resolution': self.resolution, 'aspect_ratio':self.aspect_ratio, 'generation_size':self.generation_size, 'model_roots': [str(p) for p in self.library.roots()],
-                    'hardware': dict(self.hardware), 'schema_version': 2, 'sd_profile':self.sd_profile,
+                    'hardware': dict(HARDWARE_DEFAULTS), 'schema_version': 2, 'sd_profile':self.sd_profile,
                     'sd_default':dict(SD_DEFAULT), 'sd_defaults':SD_DEFAULTS, 'sd_custom':dict(self.sd_custom), 'sd_custom_model':dict(self.sd_custom_model)}
 
     def model_catalog(self, roots=None):
@@ -295,7 +294,7 @@ class GenerationManager:
         files, errors = set(), []
         for root in roots:
             if not root.is_dir():
-                errors.append(f'Pasta indisponível: {root}')
+                errors.append(f'Folder unavailable: {root}')
                 continue
             try:
                 for path in root.rglob('*'):
@@ -304,12 +303,12 @@ class GenerationManager:
                     if path.suffix.lower() in {'.gguf','.safetensors'} and path.is_file() and path.resolve().is_relative_to(root):
                         files.add(str(path.resolve()))
             except OSError as exc:
-                errors.append(f'Não foi possível ler {root}: {exc}')
+                errors.append(f'Could not read {root}: {exc}')
         components=self._catalog_components(files)
         files={p for p,c in components.items() if (c['role']=='diffusion' and c['family'] in PROFILES) or (c['role']=='encoder' and c['family'] in {component_family(f,'encoder') for f in PROFILES}) or (c['role']=='vae' and c['family'] in PROFILES)}
         return {'files': sorted(files), 'root': str(roots[0]), 'roots': [str(p) for p in roots],
                 'errors': errors, 'selected': self.model_settings(),
-                'profiles': PROFILES, 'model_defaults':MODEL_DEFAULTS, 'custom_defaults':CUSTOM_DEFAULTS, 'samplers':SAMPLERS, 'schedulers':SCHEDULERS, 'resolutions': RESOLUTIONS, 'aspect_ratios':list(ASPECT_RATIOS), 'generation_sizes':GENERATION_SIZE_LABELS, 'resolution_options':{ratio:{key:[image_geometry(key,ratio)['width'],image_geometry(key,ratio)['height']] for key in RESOLUTIONS} for ratio in ASPECT_RATIOS}, 'components': {p:components[p] for p in files}}
+                'profiles': PROFILES, 'sd_profile_families': SD_PROFILE_FAMILIES, 'model_defaults':MODEL_DEFAULTS, 'custom_defaults':CUSTOM_DEFAULTS, 'samplers':SAMPLERS, 'schedulers':SCHEDULERS, 'resolutions': RESOLUTIONS, 'aspect_ratios':list(ASPECT_RATIOS), 'generation_sizes':GENERATION_SIZE_LABELS, 'resolution_options':{ratio:{key:[image_geometry(key,ratio)['width'],image_geometry(key,ratio)['height']] for key in RESOLUTIONS} for ratio in ASPECT_RATIOS}, 'components': {p:components[p] for p in files}}
 
     def library_status(self):
         catalog=self.model_catalog()
@@ -342,7 +341,7 @@ class GenerationManager:
         if action=='cancel':return self.library.cancel()
         with self.operation_lock:
             if self.closed or self.job['state']=='running':
-                raise RuntimeError('Aguarde a geração terminar para gerenciar modelos.')
+                raise RuntimeError('Wait for image generation to finish before managing models.')
             if action in ('add','destination','forget'):
                 result=self.library.configure(body.get('folder'),action)
                 self._sync_selection()
@@ -358,26 +357,26 @@ class GenerationManager:
                 if action=='verify' and requested is not None:
                     families=body.get('families')
                     if not isinstance(families,list) or not families or any(not isinstance(f,str) or f not in sets for f in families):
-                        raise ValueError('Escolha um conjunto válido para verificar.')
+                        raise ValueError('Select a valid model set to verify.')
                     if not isinstance(requested,dict) or set(requested)!=set(families):
-                        raise ValueError('Escolha os componentes do conjunto a verificar.')
+                        raise ValueError('Select the components in the set you want to verify.')
                     for family,selection in requested.items():
                         if not isinstance(selection,dict) or set(selection)!={'diffusion','encoder','vae'}:
-                            raise ValueError('Escolha os três componentes para verificar.')
+                            raise ValueError('Select all three components before verifying.')
                         if any(not isinstance(path,str) or path not in sets[family]['choices'][role] for role,path in selection.items()):
-                            raise ValueError('Escolha arquivos compatíveis das pastas da biblioteca.')
+                            raise ValueError('Select compatible files from the library folders.')
                         present[family]=dict(selection)
                 return self.library.start(action,body.get('families'),present)
-            raise ValueError('Ação de modelos inválida.')
+            raise ValueError('Invalid model action.')
 
     def selection_error(self):
         roots=self.library.roots()
         verified=self.library.verifications()
-        for label,path in (('Gerador',self.model),('Encoder',self.encoder),('VAE',self.vae)):
+        for label,path in (('Generator',self.model),('Encoder',self.encoder),('VAE',self.vae)):
             if not path or not path.is_file() or not any(path.resolve().is_relative_to(root) for root in roots):
-                return f'{label} do conjunto selecionado indisponível. Escolha os componentes na aba Modelos.'
+                return f'{label} is unavailable in the selected set. Choose components on the Models tab.'
             if verified.get(str(path),{}).get('integrity')=='failed':
-                return f'Integridade do {label.lower()} diferente do arquivo confirmado. Confira o componente na aba Modelos.'
+                return f'{label} in the selected set differs from the verified file. Check the component on the Models tab.'
         return None
 
     def _sync_selection(self):
@@ -402,35 +401,35 @@ class GenerationManager:
 
     def _configure(self, settings, persist=False, allow_missing=False):
         if not isinstance(settings, dict) or settings.get('profile') not in PROFILES:
-            raise ValueError('Escolha um conjunto válido de componentes.')
+            raise ValueError('Select a valid set of components.')
         sd_profile = settings.get('sd_profile', self.sd_profile)
+        if sd_profile == 'default' and settings['profile'] == 'z-image-turbo' and settings.get('experimental_five_steps') is True:
+            sd_profile = 'z-image-5'
+        if sd_profile == 'flux3-klein-6':
+            sd_profile = 'flux3-klein-5'
         if sd_profile not in (*SD_DEFAULTS,'custom'):
-            raise ValueError('Escolha um perfil disponível ou Personalizado.')
-        if sd_profile != 'custom' and settings['profile'] != ('z-image-turbo' if sd_profile=='default' else sd_profile):
-            raise ValueError('O conjunto não corresponde ao perfil padrão.')
+            raise ValueError('Select an available profile or Custom.')
+        if sd_profile != 'custom' and settings['profile'] != SD_PROFILE_FAMILIES[sd_profile]:
+            raise ValueError('The selected set does not match the default profile.')
         sd_custom = normalize_sd(settings.get('sd_custom', self.sd_custom))
         custom_model = settings.get('sd_custom_model',self.sd_custom_model)
         if not isinstance(custom_model,dict):
-            raise ValueError('Componentes personalizados inválidos.')
+            raise ValueError('Invalid custom components.')
         custom_model = {k:v for k,v in custom_model.items() if k in ('profile','diffusion','encoder','vae','vision') and isinstance(v,str)}
         if custom_model and custom_model.get('profile') not in PROFILES:
             custom_model = {}
-        keep_loaded = settings.get('keep_loaded', self.keep_loaded)
-        if not isinstance(keep_loaded, bool):
-            raise ValueError('A opção de manter modelo carregado deve ser ligada ou desligada.')
         adaptive_weights = settings.get('adaptive_weights', self.adaptive_weights)
         if not isinstance(adaptive_weights, bool):
-            raise ValueError('Escolha ligar ou desligar a distribuição automática dos pesos.')
+            raise ValueError('Choose whether to enable automatic weight distribution.')
         resolution = settings.get('resolution', self.resolution)
         if not isinstance(resolution, str) or resolution not in RESOLUTIONS:
-            raise ValueError('Escolha uma resolução entre 720p e 4K UHD.')
+            raise ValueError('Select a resolution between 720p and 4K UHD.')
         aspect_ratio = settings.get('aspect_ratio',self.aspect_ratio)
         generation_size = settings.get('generation_size',self.generation_size)
         if not isinstance(aspect_ratio,str) or aspect_ratio not in ASPECT_RATIOS:
-            raise ValueError('Escolha uma proporção válida.')
+            raise ValueError('Select a valid aspect ratio.')
         if not isinstance(generation_size,str) or generation_size not in GENERATION_SIZES:
-            raise ValueError('Escolha um tamanho de geração disponível.')
-        hardware_settings = hardware.normalize(settings.get('hardware', self.hardware))
+            raise ValueError('Select an available generation size.')
         paths = {}
         roots = normalize_roots(settings.get('model_roots', [str(p) for p in self.library.roots()]))
         for key in ('diffusion', 'encoder', 'vae', 'vision'):
@@ -439,37 +438,34 @@ class GenerationManager:
                 paths[key] = None
                 continue
             if not isinstance(value, str) or not value or '\0' in value:
-                raise ValueError(f'Falta o arquivo oficial {MODEL_DEFAULTS[settings["profile"]][key]}. Confira as pastas dos modelos.')
+                raise ValueError(f'The official file {MODEL_DEFAULTS[settings["profile"]][key]} is missing. Check the model folders.')
             path = local_path(value)
             if path.suffix.lower() not in {'.gguf', '.safetensors'} or (not allow_missing and (not any(path.is_relative_to(root) for root in roots) or not path.is_file())):
-                raise ValueError(f'Componente inválido ou ausente: {key}. Escolha um arquivo da pasta de modelos.')
+                raise ValueError(f'Missing or invalid component: {key}. Choose a file from a model folder.')
             paths[key] = path
         if not allow_missing:
             model_catalog.validate(settings['profile'], paths)
             verified=self.library.verifications()
             if any(verified.get(str(path),{}).get('integrity')=='failed' for path in paths.values() if path):
-                raise ValueError('Um componente tem integridade diferente do arquivo confirmado. Confira a aba Modelos.')
+                raise ValueError('A component differs from the verified file. Check the Models tab.')
         if sd_profile == 'custom':
             custom_model = {'profile':settings['profile'], **{key:str(value) if value else '' for key,value in paths.items()}}
         with self.lock:
             if self.closed or self.job['state'] == 'running':
-                raise RuntimeError('Aguarde o pedido terminar antes de trocar o modelo.')
+                raise RuntimeError('Wait for the job to finish before switching models.')
             if persist:
-                saved = {'profile': settings['profile'], 'keep_loaded': keep_loaded, 'adaptive_weights': adaptive_weights, 'resolution': resolution, 'aspect_ratio':aspect_ratio, 'generation_size':generation_size,
-                         'model_roots': [str(p) for p in roots], 'hardware': hardware_settings, 'sd_profile':sd_profile, 'sd_custom':sd_custom, 'sd_custom_model':custom_model,
+                saved = {'profile': settings['profile'], 'adaptive_weights': adaptive_weights,
+                         'resolution': resolution, 'aspect_ratio':aspect_ratio, 'generation_size':generation_size,
+                         'model_roots': [str(p) for p in roots], 'sd_profile':sd_profile, 'sd_custom':sd_custom, 'sd_custom_model':custom_model,
                          **{key: str(value) if value else '' for key, value in paths.items()}}
                 self.store.save(saved)
             old_sd = self.sd_custom if self.sd_profile=='custom' else SD_DEFAULTS[self.sd_profile]
             new_sd = sd_custom if sd_profile=='custom' else SD_DEFAULTS[sd_profile]
-            reload_required = old_sd['mmap'] != new_sd['mmap'] or any(hardware_settings[key]!=self.hardware[key] for key in ('device','compatibility')) or self.profile != settings['profile'] or (self.model,self.encoder,self.vae) != tuple(paths[key] for key in ('diffusion','encoder','vae'))
-            if reload_required or adaptive_weights != self.adaptive_weights or not keep_loaded:
+            reload_required = old_sd['mmap'] != new_sd['mmap'] or self.profile != settings['profile'] or (self.model,self.encoder,self.vae) != tuple(paths[key] for key in ('diffusion','encoder','vae'))
+            if reload_required or adaptive_weights != self.adaptive_weights:
                 self.resident.stop()
-            if self.resident_policy and hardware_settings['upscale_device'] != self.hardware['upscale_device']:
-                self.resident_policy = {**self.resident_policy,'refresh_upscaler':True}
             self.sd_profile, self.sd_custom = sd_profile, sd_custom
             self.sd_custom_model = custom_model
-            self.hardware = hardware_settings
-            self.keep_loaded = keep_loaded
             self.adaptive_weights = adaptive_weights
             self.resolution = resolution
             self.aspect_ratio, self.generation_size = aspect_ratio, generation_size
@@ -497,8 +493,16 @@ class GenerationManager:
         try:
             log = self.logs/(state['id']+'.log')
             with log.open('rb') as stream:
-                stream.seek(-min(log.stat().st_size,32768),os.SEEK_END)
+                offset = max(0, os.fstat(stream.fileno()).st_size - 32768)
+                stream.seek(offset)
                 text = stream.read().decode('utf-8',errors='replace')
+            _, start, sampling = text.rpartition('[I] generating image:')
+            if start:
+                text = sampling
+            elif offset == 0:
+                return None
+            if '[I] sampling completed, taking ' in text:
+                return {'stage':'vae_decode'}
             matches = re.findall(r'(\d+)/(\d+)\s*-\s*([\d.]+)(s/it|it/s)',text)
             if not matches:
                 return None
@@ -548,6 +552,8 @@ class GenerationManager:
         self.cleanup_temporary()
         with self.lock:
             state = dict(self.job)
+            if state.get('state') == 'done' and state.get('image') and not self.image_path(state['id']).is_file():
+                state['image'] = None
         if state.get('started'):
             state['elapsed'] = round(state.get('finished', time.time()) - state['started'], 1)
         if state.get('state')=='running' and state.get('phase')=='generating' and not state.get('settings',{}).get('keep_loaded'):
@@ -578,16 +584,6 @@ class GenerationManager:
         state['enhancer'] = self.enhancer.status()
         return state
 
-    def set_keep_loaded(self, enabled):
-        if not isinstance(enabled, bool):
-            raise ValueError('Escolha ligar ou desligar a permanência do modelo.')
-        with self.operation_lock:
-            if not enabled:
-                self.cancel()
-            settings = self.model_settings()
-            settings['keep_loaded'] = enabled
-            return self.configure(settings, persist=True)
-
     def cancel(self):
         with self.operation_lock:
             with self.lock:
@@ -600,21 +596,21 @@ class GenerationManager:
             if worker and worker is not threading.current_thread():
                 worker.join(timeout=10)
             if worker and worker.is_alive():
-                raise RuntimeError('O cancelamento está em andamento. Aguarde a liberação do motor.')
+                raise RuntimeError('Cancellation is in progress. Wait for the engine to become available.')
             return self.status()
 
     def _check_active(self, deadline=None):
         if self.closed or self.cancel_event.is_set():
-            raise RuntimeError('Geração cancelada.')
+            raise RuntimeError('Generation canceled.')
         if deadline is not None and time.monotonic() >= deadline:
-            raise RuntimeError('O pedido excedeu 30 minutos.')
+            raise RuntimeError('The job exceeded the 30-minute limit.')
 
     def store_reference(self, data):
         if not 33 <= len(data) <= MAX_REFERENCE_BYTES or data[:8] != b'\x89PNG\r\n\x1a\n' or data[8:16] != b'\0\0\0\rIHDR':
-            raise ValueError('Envie uma imagem PNG válida de até 25 MB.')
+            raise ValueError('Upload a valid PNG image up to 25 MB.')
         width, height = struct.unpack('>II', data[16:24])
         if not 0 < width <= 8192 or not 0 < height <= 8192 or width * height > 16777216:
-            raise ValueError('A referência deve ter até 8192 pixels por lado e 16 megapixels.')
+            raise ValueError('Reference images must fit within 8,192 pixels per side and 16 megapixels in total.')
         position, has_pixels, complete = 8, False, False
         while position + 12 <= len(data):
             size = struct.unpack('>I', data[position:position + 4])[0]
@@ -624,85 +620,85 @@ class GenerationManager:
             kind = data[position + 4:position + 8]
             crc = struct.unpack('>I', data[end - 4:end])[0]
             if zlib.crc32(data[position + 4:end - 4]) != crc:
-                raise ValueError('A imagem de referência está corrompida.')
+                raise ValueError('The reference image is corrupted.')
             has_pixels |= kind == b'IDAT'
             if kind == b'IEND':
                 complete = size == 0 and end == len(data) and has_pixels
                 break
             position = end
         if not complete:
-            raise ValueError('A imagem de referência está incompleta ou inválida.')
+            raise ValueError('The reference image is incomplete or invalid.')
         identity = uuid.uuid4().hex
         with self.lock:
-            if self.closed:raise ValueError('O app está encerrando.')
+            if self.closed:raise ValueError('The app is shutting down.')
             self._prune_temporary_locked()
             with (self.references / (identity + '.png')).open('xb') as output:output.write(data)
             self.reference_seen[identity]=time.time()
         return {'id': identity, 'image': '/references/' + identity + '.png'}
 
-    def start(self, prompt, reference=None):
+    def start(self, prompt, reference=None, *, seed=None):
+        if seed is not None and (type(seed) is not int or not 0 <= seed < 2**31):
+            raise ValueError('The seed must be an integer between 0 and 2,147,483,647.')
         with self.operation_lock:
-            return self._start(prompt, reference)
+            return self._start(prompt, reference, seed)
 
-    def _start(self, prompt, reference=None):
+    def _start(self, prompt, reference, seed):
         verified=self.library.verifications()
         if any(verified.get(str(path),{}).get('integrity')=='failed' for path in (self.model,self.encoder,self.vae) if path):
-            raise ValueError('Um componente tem integridade diferente do arquivo confirmado. Confira a aba Modelos.')
+            raise ValueError('A component differs from the verified file. Check the Models tab.')
         for component in (self.model, self.encoder, self.vae, self.vision):
             if component and not any(component.resolve().is_relative_to(root) for root in self.library.roots()):
-                raise ValueError('O componente selecionado está fora das pastas de modelos configuradas.')
+                raise ValueError('The selected component is outside the configured model folders.')
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > MAX_PROMPT_CHARS or '\0' in prompt:
-            raise ValueError(f'Descreva a imagem em até {MAX_PROMPT_CHARS} caracteres.')
+            raise ValueError(f'Describe the image in up to {MAX_PROMPT_CHARS} characters.')
         if self.enhancer.status()['busy']:
-            raise RuntimeError('Aguarde o prompt terminar de melhorar.')
+            raise RuntimeError('Wait for prompt enhancement to finish.')
         references = [] if reference is None else [reference] if isinstance(reference, str) else reference
         if not isinstance(references, list) or len(references) > 10:
-            raise ValueError('Anexe até 10 imagens de referência.')
+            raise ValueError('Attach up to 10 reference images.')
         reference_paths = []
         for identity in references:
             if not isinstance(identity, str) or not REFERENCE_ID.fullmatch(identity):
-                raise ValueError('Identificador da referência inválido. Anexe a imagem novamente.')
+                raise ValueError('Invalid reference image ID. Attach the image again.')
             reference_path = self.references / (identity + '.png')
             if not reference_path.is_file() or reference_path.is_symlink():
-                raise ValueError('Imagem de referência não encontrada. Anexe novamente.')
+                raise ValueError('Reference image not found. Attach it again.')
             reference_paths.append(reference_path)
         with self.lock:
             if self.closed:
-                raise RuntimeError('O servidor está encerrando.')
+                raise RuntimeError('The server is shutting down.')
             if self.job['state'] == 'running':
-                raise RuntimeError('Já existe uma imagem sendo criada. Aguarde.')
+                raise RuntimeError('An image is already being generated. Wait for it to finish.')
             if reference_paths and self.profile == 'z-image-turbo':
-                raise ValueError('Z-Image Turbo neste app gera somente por texto; remova as imagens de referência.')
+                raise ValueError('Z-Image Turbo only supports text-to-image generation in this app. Remove the reference images.')
             if not self.executable.is_file() or not os.access(self.executable, os.X_OK):
-                raise FileNotFoundError('Backend não compilado. Execute ./build.sh na pasta do projeto.')
+                raise FileNotFoundError('The backend has not been built. Run ./build.sh from the project folder.')
             if not self.upscale_executable.is_file() or not os.access(self.upscale_executable, os.X_OK):
-                raise FileNotFoundError('Executor de ampliação ausente: backends/upscayl-ncnn/upscayl-bin.')
+                raise FileNotFoundError('Upscaling executable missing: backends/upscayl-ncnn/upscayl-bin.')
             if self.upscale_model.suffix != '.bin':
-                raise ValueError('O ampliador NCNN precisa de um modelo .bin com seu arquivo .param correspondente.')
+                raise ValueError('The NCNN upscaler requires a .bin model and its matching .param file.')
             for component in (self.model, self.encoder, self.vae, self.upscale_model, self.upscale_model.with_suffix('.param')):
                 if component is not None and not component.is_file():
-                    raise FileNotFoundError(f'Componente não encontrado: {component.name}. Confira se o SSD está montado e a pasta dos modelos está correta.')
+                    raise FileNotFoundError(f'Component not found: {component.name}. Check that the SSD is mounted and the model folder is correct.')
             model_catalog.validate(self.profile, {'diffusion':self.model,'encoder':self.encoder,'vae':self.vae,'vision':self.vision if reference_paths else None})
             model_catalog.validate_upscaler(self.upscale_model)
             if self.resident.loaded() and self.resident_policy:
                 policy = self.resident_policy
-                if policy.get('refresh_upscaler'):
-                    choices = {**self.hardware,'device':str(policy['generator']['index'])}
-                    policy,_ = hardware.select(hardware.discover(self.executable),choices)
-                    self.resident_policy = policy
             else:
-                policy, _ = hardware.select(hardware.discover(self.executable), self.hardware)
+                policy, _ = hardware.select(hardware.discover(self.executable), HARDWARE_DEFAULTS)
             previous_job=dict(self.job)
             if any(not path.is_file() for path in reference_paths):
-                raise ValueError('Uma referência foi removida. Anexe a imagem novamente.')
+                raise ValueError('A reference image was removed. Attach it again.')
             identity = uuid.uuid4().hex
             self.cancel_event.clear()
             geometry = image_geometry(self.resolution,self.aspect_ratio,self.generation_size)
-            seed = secrets.randbelow(2**31)
+            if seed is None:
+                seed = secrets.randbelow(2**31)
             self.job = {'version': 1, 'artifacts_version':2, 'id': identity, 'state': 'running', 'image': None, 'error': None,
                         'started': time.time(), 'seed': seed, 'phase': 'generating',
                         'resolution': self.resolution, 'aspect_ratio':self.aspect_ratio, 'generation_size':self.generation_size, 'hardware': policy, **geometry}
             self.job['settings'] = {'profile':self.profile, 'diffusion':str(self.model), 'encoder':str(self.encoder), 'vae':str(self.vae), 'vision':str(self.vision) if self.vision else '', 'keep_loaded':self.keep_loaded, 'adaptive_weights':self.adaptive_weights, 'upscale_model':str(self.upscale_model), 'sd':dict(self.sd_custom if self.sd_profile=='custom' else SD_DEFAULTS[self.sd_profile])}
+            self.job['settings']['sd_profile'] = self.sd_profile
             self.job['reference_ids'] = references
             self.job['model_loaded_at_start'] = self.resident.loaded()
             try:
@@ -732,7 +728,7 @@ class GenerationManager:
                 except subprocess.TimeoutExpired:
                     os.killpg(process.pid, signal.SIGKILL)
                     process.wait()
-                raise RuntimeError('O pedido excedeu 30 minutos. Consulte o registro em logs.')
+                raise RuntimeError('The job exceeded the 30-minute limit. See the log in the logs folder.')
             finally:
                 with self.lock:
                     if self.process is process:
@@ -753,8 +749,11 @@ class GenerationManager:
         upscale_log = self.logs / (job['id'] + '-upscale.log')
         settings = job['settings']
         profile_name = settings['profile']
-        profile = generation_profile(settings.get('sd',SD_DEFAULT),profile_name if profile_name in PROFILES else 'z-image-turbo')
-        base_width, base_height = job['base_width'],job['base_height']
+        base_width, base_height = job['base_width'], job['base_height']
+        profile = generation_profile(
+            settings.get('sd', SD_DEFAULT), profile_name if profile_name in PROFILES else 'z-image-turbo',
+            sd_profile=settings.get('sd_profile'), base_size=(base_width, base_height),
+        )
         policy = job['hardware']
         env = hardware.environment()
         if policy['compatibility']:
@@ -806,7 +805,7 @@ class GenerationManager:
                     self._check_active(deadline)
                     server_executable = self.executable.with_name('sd-server')
                     if not server_executable.is_file():
-                        raise RuntimeError('Motor persistente não compilado. Execute ./build.sh.')
+                        raise RuntimeError('The persistent engine has not been built. Run ./build.sh.')
                     startup = [str(server_executable), *components,
                                '--backend', runtime_backend,
                                *weight_args, *(['--mmap'] if profile['mmap'] else [])]
@@ -821,7 +820,7 @@ class GenerationManager:
                     generation_seconds = round(time.monotonic() - started, 2)
                     log.write_text('Motor persistente: consulte logs/resident.log.\n', encoding='utf-8')
                 else:
-                    generation_seconds = self._run_stage(command, log, env, deadline, 'a geração')
+                    generation_seconds = self._run_stage(command, log, env, deadline, 'image generation')
             crop_box(resized_size, final_size, max_crop)
             intermediate_valid = False
             upscale_validation = None
@@ -849,7 +848,7 @@ class GenerationManager:
                 if very_light and not chained:
                     first_command = [str(self.upscale_executable), '-i', str(base), '-o', str(intermediate), *upscale_options]
                     first_log = self.logs / (job['id'] + '-upscale-first.log')
-                    upscale_seconds = self._run_stage(first_command, first_log, env, deadline, 'a primeira ampliação')
+                    upscale_seconds = self._run_stage(first_command, first_log, env, deadline, 'the first upscaling pass')
                     self._validate_image(intermediate, (base_width * 4, base_height * 4))
                     self._publish(upscale_pass=2, phase_started=time.time())
                     next_input = intermediate
@@ -860,7 +859,7 @@ class GenerationManager:
                     upscale_command.append('-2')
                 if native_png:
                     upscale_command.extend(['-P', f'{final_size[0]}x{final_size[1]}'])
-                upscale_seconds += self._run_stage(upscale_command, upscale_log, env, deadline, 'a ampliação')
+                upscale_seconds += self._run_stage(upscale_command, upscale_log, env, deadline, 'upscaling')
                 upscale_validation = self._validate_image(upscaled, encoded_size)
                 self._publish(upscale_seconds=round(upscale_seconds, 2), upscale_pass=2 if very_light else 1)
             self._publish(phase='finalizing')
@@ -945,7 +944,7 @@ def create_server(manager, port=7860):
 
         def do_GET(self):
             if not self.valid_host():
-                return self.send(403, {'error': 'Acesso permitido apenas pelo endereço local.'})
+                return self.send(403, {'error': 'Access is limited to the local address.'})
             path = urlsplit(self.path).path
             if path in ('/api/library','/api/library/progress','/api/library/folders'):
                 try:
@@ -967,7 +966,7 @@ def create_server(manager, port=7860):
             if path == '/api/hardware':
                 try:
                     devices = hardware.discover(manager.executable)
-                    policy, _ = hardware.select(devices, manager.hardware)
+                    policy, _ = hardware.select(devices, HARDWARE_DEFAULTS)
                     return self.send(200, {'devices': devices, 'selected': policy})
                 except (ValueError, RuntimeError) as exc:
                     return self.send(503, {'error': str(exc)})
@@ -998,11 +997,11 @@ def create_server(manager, port=7860):
             if path.startswith('/references/') and IMAGE_NAME.fullmatch(path[12:]):
                 data=manager.asset_bytes(path[12:-4],reference=True)
                 if data is not None:return self.send(200,data,'image/png')
-            return self.send(404, {'error': 'Não encontrado.'})
+            return self.send(404, {'error': 'Not found.'})
 
         def do_POST(self):
             if not self.valid_host() or self.headers.get('Origin', 'http://' + self.headers.get('Host', '')) != 'http://' + self.headers.get('Host', ''):
-                return self.send(403, {'error': 'Origem não permitida.'})
+                return self.send(403, {'error': 'Origin not allowed.'})
             if self.path == '/api/enhance/cancel':
                 return self.send(200,manager.enhancer.cancel_current())
             if self.path == '/api/cancel':
@@ -1012,15 +1011,15 @@ def create_server(manager, port=7860):
                     return self.send(409, {'error': str(exc)})
             if self.path == '/api/reference':
                 if self.headers.get_content_type() != 'image/png':
-                    return self.send(415, {'error': 'Envie a referência como image/png.'})
+                    return self.send(415, {'error': 'Upload the reference image as image/png.'})
                 try:
                     length = int(self.headers.get('Content-Length', '0'))
                     if not 0 < length <= MAX_REFERENCE_BYTES:
-                        return self.send(413, {'error': 'A referência deve ter até 25 MB.'})
+                        return self.send(413, {'error': 'The reference image must be 25 MB or smaller.'})
                     self.connection.settimeout(30)
                     data = self.rfile.read(length)
                     if len(data) != length:
-                        raise ValueError('O envio da referência ficou incompleto.')
+                        raise ValueError('The reference image upload was incomplete.')
                     return self.send(201, manager.store_reference(data))
                 except ValueError as exc:
                     return self.send(400, {'error': str(exc)})
@@ -1034,22 +1033,22 @@ def create_server(manager, port=7860):
                     return self.send(400, {'error':str(exc)})
                 except RuntimeError as exc:
                     return self.send(409, {'error':str(exc)})
-            if self.path not in {'/api/generate', '/api/models', '/api/runtime', '/api/settings','/api/library','/api/enhance','/api/references/release'}:
-                return self.send(404, {'error': 'Não encontrado.'})
+            if self.path not in {'/api/generate', '/api/models', '/api/settings','/api/library','/api/enhance','/api/references/release'}:
+                return self.send(404, {'error': 'Not found.'})
             if self.headers.get_content_type() != 'application/json':
-                return self.send(415, {'error': 'Envie application/json.'})
+                return self.send(415, {'error': 'Send the request as application/json.'})
             try:
                 length = int(self.headers.get('Content-Length', '0'))
                 if not 0 < length <= 65536:
-                    raise ValueError('Pedido vazio ou grande demais.')
+                    raise ValueError('The request is empty or too large.')
                 body = json.loads(self.rfile.read(length))
                 if not isinstance(body, dict):
-                    raise ValueError('Pedido inválido.')
+                    raise ValueError('Invalid request.')
                 if self.path=='/api/references/release':return self.send(200,manager.release_references(body.get('ids')))
                 if self.path=='/api/enhance':
                     with manager.operation_lock:
-                        if manager.status()['state']=='running':raise RuntimeError('Aguarde a geração terminar para melhorar o prompt.')
-                        iterator=manager.enhancer.stream(body.get('prompt'),body.get('editing',False))
+                        if manager.status()['state']=='running':raise RuntimeError('Wait for image generation to finish before enhancing the prompt.')
+                        iterator=manager.enhancer.stream(body.get('prompt'),body.get('editing',False),mode=body.get('mode','simple'))
                         first=next(iterator)
                     self.send_response(200)
                     self.send_header('Content-Type','application/x-ndjson; charset=utf-8')
@@ -1070,11 +1069,9 @@ def create_server(manager, port=7860):
                     return
                 if self.path=='/api/library':
                     return self.send(200,manager.library_action(body))
-                if self.path == '/api/runtime':
-                    return self.send(200, manager.set_keep_loaded(body.get('keep_loaded')))
                 if self.path in {'/api/models', '/api/settings'}:
                     return self.send(200, manager.configure(body, persist=True))
-                return self.send(202, manager.start(body.get('prompt'), body.get('reference')))
+                return self.send(202, manager.start(body.get('prompt'), body.get('reference'), seed=body.get('seed')))
             except (ValueError, UnicodeError) as exc:
                 return self.send(400, {'error': str(exc)})
             except RuntimeError as exc:
@@ -1088,11 +1085,11 @@ def create_server(manager, port=7860):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='popAI — imagens locais')
+    parser = argparse.ArgumentParser(description='popAI local image generation')
     parser.add_argument('--port', type=int, default=7860)
-    parser.add_argument('--model-dir', type=Path, action='append', help='Pasta de modelos; pode ser repetida')
+    parser.add_argument('--model-dir', type=Path, action='append', help='Model folder. Repeat this option to add more folders.')
     parser.add_argument('--upscale-model', type=Path, default=DEFAULT_UPSCALER,
-                        help='Pesos NCNN .bin do Real-ESRGAN 4×, com .param na mesma pasta')
+                        help='Real-ESRGAN 4× NCNN .bin weights with the .param file in the same folder')
     args = parser.parse_args()
     store = SettingsStore(ROOT)
     store.check_writable()
@@ -1101,7 +1098,7 @@ def main():
         configuration = store.load()
     except (ValueError, OSError) as exc:
         configuration = {}
-        configuration_error = f'Não foi possível ler a configuração salva: {exc}'
+        configuration_error = f'Could not read the saved settings: {exc}'
     roots = [str(p) for p in (args.model_dir or configuration.get('model_roots', [str(DEFAULT_MODEL_DIR)]))]
     manager = GenerationManager(ROOT / 'backends/stable-diffusion.cpp/build/bin/sd-cli',
                                 roots[0], ROOT / 'outputs', ROOT / 'logs', upscale_model=args.upscale_model,
@@ -1111,17 +1108,16 @@ def main():
         try:
             if configuration.get('profile') not in PROFILES:
                 configuration['profile'] = 'z-image-turbo'
-            configuration['hardware'] = {k:v for k,v in configuration.get('hardware',{}).items() if k in HARDWARE_DEFAULTS}
             configuration['model_roots'] = [str(p) for p in roots]
             manager.configure(configuration, allow_missing=True)
         except (ValueError, OSError) as exc:
-            manager.config_error = f'Confira a configuração salva: {exc}'
+            manager.config_error = f'Check the saved settings. Details: {exc}'
     server = create_server(manager, args.port)
     manager.enhancer.start()
     def stop_server(signum, frame):
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, stop_server)
-    print(f'popAI: http://127.0.0.1:{server.server_port} — Ctrl+C para encerrar.', flush=True)
+    print(f'popAI: http://127.0.0.1:{server.server_port} (press Ctrl+C to stop).', flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

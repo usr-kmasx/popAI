@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="en-US">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,78 +10,100 @@
   <script src="/app.js" defer></script>
 </head>
 <body>
-  <main class="stage" aria-label="Criador de wallpapers">
-    <div id="image-viewport" tabindex="0" aria-label="Visualização da imagem"><img id="wallpaper" alt="Wallpaper gerado" draggable="false" hidden><div id="generation-preview" aria-hidden="true" hidden></div></div>
-    <div class="topline"><div class="brand-cluster"><img id="mascot" src="/mascot.svg" width="64" height="64" alt="" aria-hidden="true"><span class="brand">pop<span>AI</span></span></div><a id="save" hidden download="wallpaper-1920x1080.png" aria-label="Baixar imagem" title="Baixar imagem"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><g class="download-arrow"><path d="M12 3v12m-5-5 5 5 5-5"/></g><path d="M5 18v3h14v-3"/></svg></a></div>
-    <div id="welcome" class="welcome"><h1>Uma ideia. Uma imagem.</h1><p>Descreva a imagem que você imagina.</p></div>
+  <main class="stage" aria-label="Wallpaper creator">
+    <div id="image-viewport" tabindex="0" aria-label="Image preview"><img id="wallpaper" alt="Generated wallpaper" draggable="false" hidden><div id="generation-preview" aria-hidden="true" hidden></div></div>
+    <div class="topline"><div class="brand-cluster"><img id="mascot" src="/mascot.svg" width="64" height="64" alt="" aria-hidden="true"><span class="brand">pop<span>AI</span></span></div><a id="save" hidden download aria-label="Download image" title="Download image"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><g class="download-arrow"><path d="M12 3v12m-5-5 5 5 5-5"/></g><path d="M5 18v3h14v-3"/></svg></a></div>
+    <div id="welcome" class="welcome"><h1>One idea. One image.</h1><p>Describe the image you have in mind.</p></div>
     <div class="composer">
-      <div id="reference-preview" aria-label="Imagens de referência" hidden></div>
-      <form id="form" autocomplete="off">
-        <input id="reference-file" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
-        <button id="add-reference" disabled type="button" aria-label="Adicionar imagem de referência" title="Adicionar imagem para editar">+</button>
-        <label class="sr-only" for="prompt">Descreva seu wallpaper</label>
-        <div class="prompt-frame">
-          <textarea id="prompt" name="prompt" rows="1" wrap="soft" placeholder="Imagine um lugar…" maxlength="16000" required autofocus aria-describedby="status" aria-keyshortcuts="Enter Shift+Enter"></textarea>
+      <div id="composer-fields">
+        <div id="reference-preview" aria-label="Reference images" hidden></div>
+        <form id="form" autocomplete="off">
+          <input id="reference-file" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+          <button id="add-reference" disabled type="button" aria-label="Add reference image" title="Add an image to edit">+</button>
+          <label class="sr-only" for="prompt">Describe your wallpaper</label>
+          <div class="prompt-frame">
+            <textarea id="prompt" name="prompt" rows="1" wrap="soft" placeholder="Describe your image…" maxlength="16000" required aria-describedby="status" aria-keyshortcuts="Enter Shift+Enter"></textarea>
+          </div>
+          <div id="enhance-control">
+            <button id="enhance-prompt" type="button" aria-label="Enhance prompt" aria-expanded="false" aria-controls="enhance-options" title="Enhance prompt" disabled><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="enhance-wand" d="m4 20 11-11 3 3L7 23M12.5 11.5l3 3" transform="translate(0 -2)"/><path class="enhance-star" d="m18 2 1 3 3 1-3 1-1 3-1-3-3-1 3-1 1-3ZM5 3l.7 2.3L8 6l-2.3.7L5 9l-.7-2.3L2 6l2.3-.7L5 3Z"/></svg></button>
+            <div id="enhance-options" role="group" aria-label="Prompt enhancement modes" hidden>
+              <button type="button" data-mode="simple">Simple</button>
+              <button type="button" data-mode="detailed">More details</button>
+              <button type="button" data-mode="creative">Creative</button>
+            </div>
+          </div>
+          <button id="model-button" type="button" aria-label="Choose models" title="Choose models">⚙</button>
+        </form>
+      </div>
+      <div class="composer-footer">
+        <div class="composer-status">
+          <span id="time-estimate" role="img" tabindex="0" hidden>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle class="eta-track" cx="12" cy="12" r="10"/><circle id="eta-arc" cx="12" cy="12" r="10" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/><circle class="eta-face" cx="12" cy="12" r="6.5"/><path class="eta-hand" d="M12 8v4l2 1"/></svg>
+            <span id="estimate-message" aria-hidden="true"></span>
+          </span>
+          <div class="composer-message">
+            <p id="status" role="status" aria-live="polite">Enter a prompt and press Enter</p>
+            <button id="expand-composer" type="button" aria-label="Show prompt and references" aria-controls="composer-fields" aria-expanded="false" hidden></button>
+          </div>
+          <button id="cancel-enhance" type="button" hidden>Cancel</button>
+          <button id="undo-enhance" type="button" hidden>Undo</button>
+          <button id="adjust-config" type="button" hidden>Adjust settings</button>
+          <button id="retry-finalize" type="button" hidden>Finish image</button>
+          <button id="cancel-generation" type="button" hidden>Cancel</button>
         </div>
-        <button id="enhance-prompt" type="button" aria-label="Melhorar prompt" title="Melhorar prompt" disabled><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="enhance-wand" d="m4 20 11-11 3 3L7 23M12.5 11.5l3 3" transform="translate(0 -2)"/><path class="enhance-star" d="m18 2 1 3 3 1-3 1-1 3-1-3-3-1 3-1 1-3ZM5 3l.7 2.3L8 6l-2.3.7L5 9l-.7-2.3L2 6l2.3-.7L5 3Z"/></svg></button>
-        <button id="model-button" type="button" aria-label="Escolher modelos" title="Escolher modelos">⚙</button>
-      </form>
-      <div class="composer-status"><span id="time-estimate" role="img" tabindex="0" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle class="eta-track" cx="12" cy="12" r="10"/><circle id="eta-arc" cx="12" cy="12" r="10" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/><circle class="eta-face" cx="12" cy="12" r="6.5"/><path class="eta-hand" d="M12 8v4l2 1"/></svg></span><p id="status" role="status" aria-live="polite">Digite sua ideia e aperte Enter</p><button id="cancel-enhance" type="button" hidden>Cancelar</button><button id="undo-enhance" type="button" hidden>Desfazer</button><button id="adjust-config" type="button" hidden>Ajustar configuração</button><button id="retry-finalize" type="button" hidden>Concluir imagem</button><button id="cancel-generation" type="button" hidden>Cancelar</button></div>
+        <div class="new-generation-slot">
+          <button id="new-generation" type="button" aria-label="Start a new generation">New</button>
+        </div>
+      </div>
     </div>
   </main>
   <dialog id="model-dialog" aria-labelledby="model-title">
     <div class="config-scroll">
-    <h2 id="model-title">Configurações</h2>
-    <div class="config-tabs" role="tablist" aria-label="Configurações">
-      <button id="tab-general" type="button" role="tab" aria-selected="true" aria-controls="panel-general">Resolução</button>
+    <h2 id="model-title">Settings</h2>
+    <div class="config-tabs" role="tablist" aria-label="Settings">
+      <button id="tab-general" type="button" role="tab" aria-selected="true" aria-controls="panel-general">Resolution</button>
       <button id="tab-sd" type="button" role="tab" aria-selected="false" aria-controls="panel-sd">Stable Diffusion</button>
-      <button id="tab-models" type="button" role="tab" aria-selected="false" aria-controls="panel-models">Modelos</button>
+      <button id="tab-models" type="button" role="tab" aria-selected="false" aria-controls="panel-models">Models</button>
     </div>
     <section id="panel-general" role="tabpanel" aria-labelledby="tab-general">
-      <label for="output-aspect">Proporção</label><select id="output-aspect"></select>
-      <label for="generation-size">Geração</label><select id="generation-size"></select>
-      <label for="output-resolution">Resolução final</label><select id="output-resolution"></select>
+      <div><label for="output-aspect">Aspect ratio</label><select id="output-aspect"></select></div>
+      <div><label for="generation-size">Generation size</label><select id="generation-size"></select></div>
+      <div><label for="output-resolution">Output resolution</label><select id="output-resolution"></select></div>
     </section>
     <section id="panel-models" role="tabpanel" aria-labelledby="tab-models" hidden>
-      <div class="library-toolbar"><button id="choose-destination" type="button">Pasta de download</button><button id="add-model-folder" type="button">Localizar existentes</button><button id="refresh-models" type="button" aria-label="Atualizar modelos">↻</button></div>
+      <div class="library-toolbar"><button id="choose-destination" type="button">Download folder</button><button id="add-model-folder" type="button">Find existing models</button><button id="refresh-models" type="button" aria-label="Refresh models">↻</button></div>
       <p id="model-destination"></p><div id="library-folders"></div>
       <div id="library-sets"></div>
-      <div id="library-progress" hidden><progress id="library-bar" max="100" value="0"></progress><p id="library-operation" role="status"></p><button id="cancel-model-download" type="button">Cancelar</button></div>
-      <button id="download-all" type="button">Baixar todos os conjuntos</button>
+      <div id="library-progress" hidden><progress id="library-bar" max="100" value="0"></progress><p id="library-operation" role="status"></p><button id="cancel-model-download" type="button">Cancel</button></div>
+      <button id="download-all" type="button">Download all model sets</button>
       <p id="library-status" role="status" aria-live="polite"></p>
     </section>
     <section id="panel-sd" role="tabpanel" aria-labelledby="tab-sd" hidden>
-      <label class="keep-option"><input id="keep-loaded" type="checkbox"> Manter motor carregado</label>
-      <p id="keep-status" role="status"></p>
-      <label class="keep-option"><input id="adaptive-weights" type="checkbox"> Distribuição automática de pesos (experimental)</label>
-      <label for="model-profile">Perfil de geração</label>
-      <select id="model-profile"><option value="default">Padrão · Z-Image Turbo</option><option value="klein">Padrão · FLUX.2 Klein 4B</option><option value="flux3-klein">Padrão · FLUX 3 Image Klein</option><option value="custom">Personalizado</option></select>
+      <label class="keep-option"><input id="adaptive-weights" type="checkbox"> Automatic weight placement</label>
+      <div>
+        <label for="model-profile">Generation profile</label>
+        <select id="model-profile"><option value="default">Z-Image Turbo · 9 steps (default)</option><option value="z-image-5">Z-Image Turbo · 5 steps</option><option value="z-image-4">Z-Image Turbo · 4 steps</option><option value="klein">FLUX.2 Klein 4B · 4 steps (default)</option><option value="klein-3">FLUX.2 Klein 4B · 3 steps</option><option value="klein-2">FLUX.2 Klein 4B · 2 steps</option><option value="flux3-klein">FLUX 3 Image Klein · 16 steps (default)</option><option value="flux3-klein-8">FLUX 3 Image Klein · 8 steps</option><option value="flux3-klein-5">FLUX 3 Image Klein · 5 steps</option><option value="custom">Custom</option></select>
+      </div>
       <div class="sd-grid">
-        <div><label for="sd-steps">Passos</label><input id="sd-steps" type="number" min="1" max="150" step="1"></div>
+        <div><label for="sd-steps">Steps</label><input id="sd-steps" type="number" min="1" max="150" step="1"></div>
         <div><label for="sd-cfg">CFG</label><input id="sd-cfg" type="number" min="0" max="30" step="0.1"></div>
         <div><label for="sd-sampler">Sampler</label><select id="sd-sampler"></select></div>
         <div><label for="sd-scheduler">Scheduler</label><select id="sd-scheduler"></select></div>
       </div>
-      <label class="keep-option"><input id="sd-vae-tiling" type="checkbox"> VAE em blocos</label>
-      <label for="sd-vae-tile-size">Bloco do VAE (pixels; 0 = automático)</label><input id="sd-vae-tile-size" type="number" min="0" max="2048" step="64">
-      <label class="keep-option"><input id="sd-mmap" type="checkbox"> Mapear arquivos na RAM (mmap)</label>
-      <details><summary>Componentes</summary><label for="model-diffusion">Gerador</label><select id="model-diffusion"></select><label for="model-encoder">Encoder</label><select id="model-encoder"></select><label for="model-vae">VAE</label><select id="model-vae"></select><select id="model-vision" aria-label="Visão" hidden><option value="">Nenhum</option></select></details>
-      <details><summary>Vulkan</summary>
-        <p id="hardware-status">Consultando GPU…</p>
-        <label for="hardware-device">GPU do gerador</label><select id="hardware-device"><option value="auto">Automática</option></select>
-        <label for="hardware-upscale-device">GPU do ampliador</label><select id="hardware-upscale-device"><option value="auto">Automática</option></select>
-        <label for="hardware-compatibility">Compatibilidade Vulkan</label><select id="hardware-compatibility"><option value="auto">Automática</option><option value="on">Ligada</option><option value="off">Desligada</option></select>
-      </details>
+      <label class="keep-option"><input id="sd-vae-tiling" type="checkbox"> VAE tiling</label>
+      <div><label for="sd-vae-tile-size">VAE tile size in pixels (0 = auto)</label><input id="sd-vae-tile-size" type="number" min="0" max="2048" step="64"></div>
+      <label class="keep-option"><input id="sd-mmap" type="checkbox"> Memory-map files (mmap)</label>
+      <details><summary>Components</summary><label for="model-diffusion">Generator</label><select id="model-diffusion"></select><label for="model-encoder">Encoder</label><select id="model-encoder"></select><label for="model-vae">VAE</label><select id="model-vae"></select><select id="model-vision" aria-label="Vision" hidden><option value="">None</option></select></details>
     </section>
     <p id="model-status" role="status"></p>
-    <div class="model-actions"><button id="model-close" type="button">Cancelar</button><button id="model-apply" type="button">Salvar</button></div>
+    <div class="model-actions"><button id="model-close" type="button">Cancel</button><button id="model-apply" type="button">Save</button></div>
     </div>
   </dialog>
   <dialog id="folder-dialog" aria-labelledby="folder-title">
-    <h2 id="folder-title">Escolher pasta</h2>
-    <form id="folder-navigation"><label for="folder-path">Local</label><div class="library-toolbar"><input id="folder-path" type="text" spellcheck="false" autocomplete="off"><button type="submit">Abrir</button></div></form>
-    <button id="folder-parent" type="button">↑ Pasta acima</button><div id="folder-list"></div>
-    <p id="folder-status" role="status"></p><div class="model-actions"><button id="folder-cancel" type="button">Cancelar</button><button id="folder-select" type="button">Escolher esta pasta</button></div>
+    <h2 id="folder-title">Choose folder</h2>
+    <form id="folder-navigation"><label for="folder-path">Location</label><div class="library-toolbar"><input id="folder-path" type="text" spellcheck="false" autocomplete="off"><button type="submit">Open</button></div></form>
+    <button id="folder-parent" type="button">↑ Parent folder</button><div id="folder-list"></div>
+    <p id="folder-status" role="status"></p><div class="model-actions"><button id="folder-cancel" type="button">Cancel</button><button id="folder-select" type="button">Choose this folder</button></div>
   </dialog>
 </body>
 </html>

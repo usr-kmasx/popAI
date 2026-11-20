@@ -1,0 +1,23 @@
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -15806,9 +15806,20 @@
+         VK_CHECK(ctx->device->device.getQueryPoolResults(ctx->query_pool, 0, ctx->query_idx, (cgraph->n_nodes + 1)*sizeof(uint64_t), timestamps.data(), sizeof(uint64_t), vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait), "get timestamp results", ctx->device);
+         if (!vk_perf_logger_concurrent) {
+             // Log each op separately
++            const bool trace_order = std::getenv("POPAI_TRACE_VULKAN_ORDER") != nullptr;
+             for (int i = 1; i < ctx->query_idx; i++) {
+                 auto node = ctx->query_nodes[i];
+                 auto name = ctx->query_fusion_names[i];
++                if (trace_order) {
++                    const double period = ctx->device->properties.limits.timestampPeriod;
++                    const auto query_length = node->op == GGML_OP_FLASH_ATTN_EXT ? node->src[0]->ne[1] : 0;
++                    const auto key_length = node->op == GGML_OP_FLASH_ATTN_EXT ? node->src[1]->ne[1] : 0;
++                    std::fprintf(stderr,
++                                 "[popai-vulkan-op] index=%d op=%s q=%lld k=%lld begin_ns=%.0f end_ns=%.0f\n",
++                                 i, ggml_op_name(node->op), static_cast<long long>(query_length),
++                                 static_cast<long long>(key_length), timestamps[i - 1] * period,
++                                 timestamps[i] * period);
++                }
+                 ctx->perf_logger->log_timing(node, name, uint64_t((timestamps[i] - timestamps[i-1]) * ctx->device->properties.limits.timestampPeriod));
+             }
+         } else {

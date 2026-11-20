@@ -40,9 +40,16 @@ function wakeMascot() { lastActivity = performance.now(); updateMascot(); prepar
 document.addEventListener('pointerdown',wakeMascot,{passive:true});
 document.addEventListener('keydown',wakeMascot);
 const form = document.querySelector('#form');
+const newGeneration = document.querySelector('#new-generation');
+function randomSeed() {
+  return crypto.getRandomValues(new Uint32Array(1))[0] & 0x7fffffff;
+}
+let pageSeed = randomSeed();
 const prompt = document.querySelector('#prompt');
 const promptDraftKey = 'popai.prompt-draft';
 const promptStateKey = 'popai.prompt-state';
+const composerSessionKey = 'popai.composer-session';
+const assetId = /^[a-f0-9]{32}$/;
 function savePromptDraft() {
   try {
     window.localStorage.setItem(promptStateKey,JSON.stringify({version:1,text:prompt.value,undo:undoPrompt===null?null:{original:undoPrompt,enhanced:prompt.value}}));
@@ -76,14 +83,8 @@ async function showGenerationPreview(job) {
   try {
     await image.decode();
     if (epoch !== previewEpoch) return;
-    endImageDrag();
-    if (!wallpaper.hidden) {
-      wallpaper.removeAttribute('src');
-      save.removeAttribute('href');
-      shown = null;
-    }
-    wallpaper.hidden = save.hidden = welcome.hidden = true;
-    imageViewport.classList.remove('has-image');
+    clearResult();
+    welcome.hidden = true;
     generationPreview.replaceChildren(image);
     generationPreview.hidden = false;
     displayedPreview = job.preview;
@@ -185,34 +186,53 @@ const outputAspect = document.querySelector('#output-aspect');
 const generationSize = document.querySelector('#generation-size');
 const outputResolution = document.querySelector('#output-resolution');
 const adaptiveWeights = document.querySelector('#adaptive-weights');
-const keepLoaded = document.querySelector('#keep-loaded');
-const keepStatus = document.querySelector('#keep-status');
 const timeEstimate = document.querySelector('#time-estimate');
 const estimateArc = document.querySelector('#eta-arc');
+const estimateMessage = document.querySelector('#estimate-message');
+function generationPhaseLabel(job) {
+  if (job.phase === 'cancelling') return 'Canceling';
+  if (job.phase === 'upscaling') return 'Upscaling';
+  if (job.phase === 'finalizing') return 'Finalizing PNG';
+  const progress = job.progress || {};
+  if (progress.stage === 'vae_decode') return 'Decoding image';
+  if (progress.stage === 'sampling') {
+    return progress.total > 0 && progress.completed >= progress.total ? 'Finalizing base image' : 'Generating image';
+  }
+  return 'Preparing generation';
+}
+
 function renderEstimate(job) {
-  timeEstimate.hidden = job.state !== 'running' || job.phase === 'cancelling';
-  if (timeEstimate.hidden) return;
+  const hidden = job.state !== 'running' || job.phase === 'cancelling';
+  if (timeEstimate.hidden !== hidden) timeEstimate.hidden = hidden;
+  if (hidden) return;
   const progress = job.progress || {};
   const total = Number(progress.total);
   const completed = Number(progress.completed);
   const sampling = job.phase === 'generating' && progress.stage === 'sampling' && progress.unit === 'steps' && total > 0;
   const remaining = Number(progress.remaining_seconds);
+  const estimate = remaining > 0 && Number.isFinite(remaining) ? ` · ≈ ${formatDuration(remaining)} remaining` : '';
   const upscaling = job.phase === 'upscaling' && job.upscale_passes !== 2 && progress.unit === 'percent' && total > 0;
   const measured = sampling || upscaling;
   estimateArc.hidden = !measured;
   estimateArc.setAttribute('stroke-dashoffset',String(measured ? 100*(1-Math.min(completed/total,1)) : 100));
-  let message = job.phase === 'upscaling' ? 'Ampliando imagem' : job.phase === 'finalizing' ? 'Salvando imagem' : 'Preparando geração';
-  if (job.phase === 'generating' && progress.stage === 'vae_decode') message = 'Decodificando imagem';
-  if (sampling) message = completed >= total ? `${completed}/${total} · Finalizando imagem base` : `${completed}/${total} · ≈ ${formatDuration(remaining)}`;
-  if (upscaling) message = `${Math.floor(completed)}% · ${progress.remaining_seconds == null ? 'Ampliando imagem' : completed >= total ? 'Finalizando ampliação' : `≈ ${formatDuration(remaining)}`}`;
-  timeEstimate.title = message;
-  timeEstimate.setAttribute('aria-label',message);
+  let message = generationPhaseLabel(job);
+  if (sampling) message = `${completed}/${total} steps${completed >= total ? ` · ${message}` : estimate}`;
+  if (upscaling) message = `${Math.floor(completed)}%${completed >= total ? ' · Finalizing upscale' : estimate || ` · ${message}`}`;
+  if (estimateMessage.textContent !== message) {
+    estimateMessage.textContent = message;
+    timeEstimate.setAttribute('aria-label', message);
+  }
 }
 let clockJob = null;
 let clockAnchor = 0;
 let clockElapsed = 0;
 function syncClock(job) {
-  if (job.state !== 'running') { clockJob = null; updateMascot(); return; }
+  if (job.state !== 'running') {
+    clockJob = null;
+    renderEstimate(job);
+    updateMascot();
+    return;
+  }
   const now = performance.now();
   const previous = clockJob?.id === job.id ? clockElapsed + (now-clockAnchor)/1000 : 0;
   clockElapsed = Math.max(Number(job.elapsed)||0,previous);
@@ -224,8 +244,8 @@ function tickClock() {
   updateMascot();
   if (!clockJob) return;
   const delta = Math.max(0,(performance.now()-clockAnchor)/1000);
-  const phase = clockJob.phase === 'cancelling' ? 'Cancelando' : clockJob.phase === 'upscaling' ? 'Ampliando com IA' : clockJob.phase === 'finalizing' ? 'Salvando PNG final' : 'Gerando imagem';
-  status.textContent = `${phase} · ${formatDuration(Math.floor(clockElapsed+delta))}`;
+  const message = `${generationPhaseLabel(clockJob)} · Total ${formatDuration(Math.floor(clockElapsed+delta))}`;
+  if (status.textContent !== message) status.textContent = message;
   const progress = {...clockJob.progress};
   if (progress.remaining_seconds != null) progress.remaining_seconds = Math.max(0,progress.remaining_seconds-delta);
   renderEstimate({...clockJob,progress});
@@ -235,8 +255,6 @@ const cancelGeneration = document.querySelector('#cancel-generation');
 const modelSlots = Object.fromEntries(['diffusion', 'encoder', 'vae', 'vision'].map(key => [key, document.querySelector(`#model-${key}`)]));
 let modelRootPaths = [];
 const refreshModels = document.querySelector('#refresh-models');
-const hardwareInputs = Object.fromEntries(['device','upscale_device','compatibility'].map(key => [key,document.querySelector('#hardware-' + key.replaceAll('_','-'))]));
-const hardwareStatus = document.querySelector('#hardware-status');
 let modelFiles = [];
 let modelCatalog = null;
 let customDraft = null;
@@ -244,18 +262,33 @@ let customModel = {};
 let activeFamily = 'z-image-turbo';
 let currentFamily = 'z-image-turbo';
 const sdInputs = Object.fromEntries(['steps','cfg','sampler','scheduler','vae_tiling','vae_tile_size','mmap'].map(key => [key,document.querySelector('#sd-' + key.replaceAll('_','-'))]));
-const generalTab = document.querySelector('#tab-general');
-const sdTab = document.querySelector('#tab-sd');
-const modelsTab = document.querySelector('#tab-models');
+const configScroll = document.querySelector('.config-scroll');
+const configTabs = ['general', 'sd', 'models'].map(name => ({
+  name,
+  button: document.querySelector('#tab-' + name),
+  panel: document.querySelector('#panel-' + name),
+}));
+let selectedConfigTab = 0;
 function selectTab(name) {
-  for (const [key,button] of [['general',generalTab],['sd',sdTab],['models',modelsTab]]) {
-    document.querySelector('#panel-'+key).hidden = name !== key;
-    button.setAttribute('aria-selected',String(name === key));
+  const next = configTabs.findIndex(tab => tab.name === name);
+  if (modelDialog.open && next === selectedConfigTab) return false;
+  const direction = !modelDialog.open ? '' : next > selectedConfigTab ? 'forward' : 'backward';
+  configTabs[next].panel.setAttribute('data-slide', direction);
+  for (const tab of configTabs) {
+    const selected = tab.name === name;
+    tab.panel.hidden = !selected;
+    tab.button.setAttribute('aria-selected', String(selected));
   }
+  selectedConfigTab = next;
+  configScroll.scrollTop = 0;
+  return true;
 }
-generalTab.addEventListener('click',() => selectTab('general'));
-sdTab.addEventListener('click',() => selectTab('sd'));
-modelsTab.addEventListener('click',() => { selectTab('models'); loadLibrary(); });
+for (const {name, button} of configTabs) {
+  button.addEventListener('click', () => {
+    const changed = selectTab(name);
+    if (name === 'models') loadLibrary(changed);
+  });
+}
 function readSd() {
   return Object.fromEntries(Object.entries(sdInputs).map(([key,input]) => [key, ['vae_tiling','mmap'].includes(key) ? input.checked : ['steps','cfg','vae_tile_size'].includes(key) ? Number(input.value) : input.value]));
 }
@@ -289,12 +322,16 @@ function showPromptNotice(text) {
   status.textContent=text;
 }
 const enhancePrompt = document.querySelector('#enhance-prompt');
+const enhanceControl = document.querySelector('#enhance-control');
+const enhanceOptions = document.querySelector('#enhance-options');
 const cancelEnhance = document.querySelector('#cancel-enhance');
 const undoEnhance = document.querySelector('#undo-enhance');
 let references = [];
 let shown = null;
 let initialStatusReceived = false;
 let hiddenImageId = null;
+let latestImageId = null;
+let rememberedResult = null;
 let resultError = null;
 let recoverableJob = null;
 const retryFinalize = document.querySelector('#retry-finalize');
@@ -313,22 +350,22 @@ function formatDuration(elapsed) {
 async function request(path, options) {
   const response = await fetch(path, options);
   const body = await response.json();
-  if (!response.ok) throw new Error(body.error || 'Não foi possível acessar o servidor.');
+  if (!response.ok) throw new Error(body.error || 'Could not reach the server.');
   return body;
 }
 
 function setBusy(value = running) {
   running = value;
   busy = value || uploading || configuring || enhancing;
+  newGeneration.disabled = busy || stopping;
   refreshModels.disabled = busy;
-  Object.values(hardwareInputs).forEach(input => { input.disabled = busy; });
   Object.values(sdInputs).forEach(input => { input.disabled = busy; });
   adjustConfig.disabled = busy;
   retryFinalize.disabled = busy;
   prompt.disabled = busy;
   addReference.disabled = busy || currentFamily === 'z-image-turbo';
   addReference.hidden = false;
-  addReference.title = currentFamily !== 'z-image-turbo' ? 'Adicionar imagem de referência' : 'Referências indisponíveis neste modelo';
+  addReference.title = currentFamily !== 'z-image-turbo' ? 'Add reference image' : 'Reference images are unavailable for this model';
   referencePreview.querySelectorAll('button').forEach(button => { button.disabled = busy; });
   modelButton.disabled = uploading || configuring || stopping || enhancing;
   modelApply.disabled = busy;
@@ -337,23 +374,56 @@ function setBusy(value = running) {
   outputAspect.disabled = busy;
   generationSize.disabled = busy;
   Object.values(modelSlots).forEach(select => { select.disabled = busy; });
-  keepLoaded.disabled = uploading || configuring || stopping;
   cancelGeneration.hidden = !running;
   cancelGeneration.disabled = stopping;
   stage.classList.toggle('busy', busy);
   form.setAttribute('aria-busy', String(busy));
-  enhancePrompt.hidden = busy;
+  enhanceControl.hidden = busy;
   undoEnhance.hidden = busy || undoPrompt === null;
   undoEnhance.disabled = busy;
   enhancePrompt.disabled = busy || !['ready','error','stopped'].includes(enhancerState.state) || enhancerState.busy || !prompt.value.trim();
-  enhancePrompt.title = enhancing ? 'Melhorando prompt…' : enhancerState.state === 'ready' ? 'Melhorar prompt' : enhancerState.state==='error' || enhancerState.state==='stopped' ? 'Tentar melhorar prompt novamente' : 'Carregando melhorador…';
+  if (enhancePrompt.disabled) setEnhanceOptions(false);
+  enhancePrompt.title = enhancing ? 'Enhancing prompt…' : enhancerState.state === 'ready' ? 'Enhance prompt' : enhancerState.state==='error' || enhancerState.state==='stopped' ? 'Retry prompt enhancement' : 'Loading prompt enhancer…';
   enhancePrompt.classList.toggle('enhancing',enhancing);
   enhancePrompt.setAttribute('aria-busy',String(enhancing));
   cancelEnhance.hidden = !enhancing;
 }
 
-enhancePrompt.addEventListener('click',async()=>{
-  if (busy || !prompt.value.trim() || !['ready','error','stopped'].includes(enhancerState.state)) return;
+function setEnhanceOptions(open) {
+  const visible = open && !enhancePrompt.disabled;
+  enhanceOptions.hidden = !visible;
+  enhancePrompt.setAttribute('aria-expanded', String(visible));
+}
+
+enhanceControl.addEventListener('pointerenter', event => {
+  if (event.pointerType !== 'touch') setEnhanceOptions(true);
+});
+enhanceControl.addEventListener('pointerleave', () => {
+  if (!enhanceOptions.contains(document.activeElement)) setEnhanceOptions(false);
+});
+enhanceControl.addEventListener('focusout', event => {
+  if (!enhanceControl.contains(event.relatedTarget)) setEnhanceOptions(false);
+});
+enhanceControl.addEventListener('keydown', event => {
+  if (event.key !== 'Escape' || enhanceOptions.hidden) return;
+  event.preventDefault();
+  setEnhanceOptions(false);
+  enhancePrompt.focus();
+});
+document.addEventListener('pointerdown', event => {
+  if (!enhanceOptions.hidden && !enhanceControl.contains(event.target)) setEnhanceOptions(false);
+});
+enhancePrompt.addEventListener('click', () => {
+  setEnhanceOptions(true);
+  if (!enhanceOptions.hidden) enhanceOptions.querySelector('button').focus();
+});
+enhanceOptions.addEventListener('click', event => {
+  const option = event.target.closest('button[data-mode]');
+  if (option) improvePrompt(option.dataset.mode);
+});
+
+async function improvePrompt(mode) {
+  if (enhancePrompt.disabled) return;
   const original=prompt.value;
   const originalUndo=undoPrompt;
   savePromptDraft();
@@ -361,18 +431,18 @@ enhancePrompt.addEventListener('click',async()=>{
   undoPrompt=null;undoEnhance.hidden=true;
   promptNotice=null;
   enhancing=true;enhanceController=new AbortController();setBusy();updateMascot();
-  status.textContent='Melhorando prompt…';stage.classList.remove('error');
+  status.textContent='Enhancing prompt…';stage.classList.remove('error');
   try {
-    const response=await fetch('/api/enhance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:original,editing:references.length>0}),signal:enhanceController.signal});
-    if(!response.ok) {const error=await response.json();throw new Error(error.error || 'Não foi possível melhorar o prompt.');}
-    if(!response.body)throw new Error('O navegador não recebeu o texto do melhorador.');
+    const response=await fetch('/api/enhance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:original,editing:references.length>0,mode}),signal:enhanceController.signal});
+    if(!response.ok) {const error=await response.json();throw new Error(error.error || 'Could not enhance the prompt.');}
+    if(!response.body)throw new Error('The browser did not receive the enhanced prompt.');
     const reader=response.body.getReader(),decoder=new TextDecoder();
     function receive(line) {
       if(!line.trim())return;
       const event=JSON.parse(line);
       if(event.error)throw new Error(event.error);
       if(event.text) {text+=event.text;prompt.value=text;resizePrompt();prompt.scrollTop=prompt.scrollHeight;}
-      if(event.state==='done') {done=true;showPromptNotice(`Prompt melhorado · ${event.seconds.toLocaleString('pt-BR')}s`);}
+      if(event.state==='done') {done=true;showPromptNotice(`Prompt enhanced · ${event.seconds.toLocaleString('en-US')}s`);}
     }
     while(true) {
       const chunk=await reader.read();
@@ -380,39 +450,34 @@ enhancePrompt.addEventListener('click',async()=>{
       pending+=decoder.decode(chunk.value,{stream:true});
       const lines=pending.split('\n');pending=lines.pop();lines.forEach(receive);
     }
-    if(!done || !text.trim())throw new Error('A melhoria foi interrompida. O texto original foi restaurado.');
+    if(!done || !text.trim())throw new Error('Prompt enhancement was interrupted. The original text was restored.');
     prompt.value=text.trim();undoPrompt=original;
   } catch(error) {
     enhanceController.abort();prompt.value=original;undoPrompt=originalUndo;
-    showPromptNotice(error.name==='AbortError'?'Melhoria cancelada · Texto original restaurado':error.message);
+    showPromptNotice(error.name==='AbortError'?'Enhancement canceled · Original text restored':error.message);
   } finally {
     enhancing=false;enhanceController=null;savePromptDraft();resizePrompt();setBusy();updateMascot();prompt.focus();
   }
-});
+}
 cancelEnhance.addEventListener('click',()=>{
   enhanceController?.abort();
   request('/api/enhance/cancel',{method:'POST'}).catch(()=>{});
 });
 undoEnhance.addEventListener('click',()=>{
   if(busy || undoPrompt===null)return;
-  prompt.value=undoPrompt;undoPrompt=null;undoEnhance.hidden=true;savePromptDraft();resizePrompt();setBusy();prompt.focus();showPromptNotice('Texto original restaurado');
+  prompt.value=undoPrompt;undoPrompt=null;undoEnhance.hidden=true;savePromptDraft();resizePrompt();setBusy();prompt.focus();showPromptNotice('Original text restored');
 });
 
 const discardedReferences=new Set();
 let releasingReferences=false;
-function releaseReferences(ids,unloading=false) {
+function releaseReferences(ids) {
   ids.forEach(id=>discardedReferences.add(id));
-  if(releasingReferences && !unloading)return;
+  if(releasingReferences)return;
   const batch=Array.from(discardedReferences).slice(0,128);
   if(!batch.length)return;
   const body=JSON.stringify({ids:batch});
-  if(unloading && typeof navigator!=='undefined' && navigator.sendBeacon) {
-    if(navigator.sendBeacon('/api/references/release',new Blob([body],{type:'application/json'}))) {
-      batch.forEach(id=>discardedReferences.delete(id));return;
-    }
-  }
   releasingReferences=true;
-  fetch('/api/references/release',{method:'POST',headers:{'Content-Type':'application/json'},body,keepalive:unloading})
+  fetch('/api/references/release',{method:'POST',headers:{'Content-Type':'application/json'},body})
     .then(response=>{if(response.ok)batch.forEach(id=>discardedReferences.delete(id));})
     .catch(()=>{}).finally(()=>{releasingReferences=false;});
 }
@@ -420,7 +485,7 @@ function reconcileReferences(missing=[]) {
   if(!references.some(r=>missing.includes(r.id)))return;
   references=references.filter(r=>!missing.includes(r.id));
   renderReferences();
-  showPromptNotice('Uma referência ficou indisponível. Anexe a imagem novamente.');
+  showPromptNotice('A reference image is unavailable. Attach it again.');
 }
 
 function renderReferences() {
@@ -430,28 +495,59 @@ function renderReferences() {
     item.className = 'reference-item';
     const image = document.createElement('img');
     image.src = reference.image;
-    image.alt = `Imagem ${index + 1}: ${reference.name}`;
+    image.alt = `Image ${index + 1}: ${reference.name}`;
     const number = document.createElement('span');
     number.className = 'reference-number';
     number.textContent = String(index + 1);
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.textContent = '×';
-    remove.setAttribute('aria-label', `Remover imagem ${index + 1}`);
+    remove.setAttribute('aria-label', `Remove image ${index + 1}`);
     remove.disabled = busy;
     remove.addEventListener('click', () => {
       if (busy) return;
       references.splice(index, 1);
       releaseReferences([reference.id]);
       renderReferences();
-      status.textContent = references.length ? `${references.length} referência(s) · Descreva a alteração e aperte Enter` : 'Digite sua ideia e aperte Enter';
+      status.textContent = references.length ? `${references.length} attached · Describe the edit and press Enter` : 'Enter a prompt and press Enter';
       prompt.focus();
     });
     item.append(image, number, remove);
     referencePreview.append(item);
   });
   referencePreview.hidden = !references.length;
-  prompt.placeholder = references.length ? 'Descreva a alteração que você quer…' : 'Imagine um lugar…';
+  prompt.placeholder = references.length ? 'Describe the edit you want…' : 'Describe your image…';
+  saveComposerSession();
+}
+
+function saveComposerSession() {
+  try {
+    window.sessionStorage.setItem(composerSessionKey, JSON.stringify({
+      references: references.map(({id, name}) => ({id, name})),
+      hiddenImageId,
+      result: rememberedResult,
+    }));
+  } catch {}
+}
+
+function restoreComposerSession() {
+  try {
+    const saved = JSON.parse(window.sessionStorage.getItem(composerSessionKey));
+    if (!saved) return;
+    if (Array.isArray(saved.references)) {
+      references = saved.references
+        .filter(item => typeof item?.id === 'string' && assetId.test(item.id) && typeof item.name === 'string')
+        .slice(0, 10)
+        .map(({id, name}) => ({id, name, image: `/references/${id}.png`}));
+    }
+    if (typeof saved.hiddenImageId === 'string' && assetId.test(saved.hiddenImageId)) hiddenImageId = saved.hiddenImageId;
+    const result = saved.result;
+    if (typeof result?.id === 'string' && assetId.test(result.id) && result.id !== hiddenImageId &&
+        Number.isInteger(result.width) && result.width > 0 && Number.isInteger(result.height) && result.height > 0) {
+      rememberedResult = {id: result.id, width: result.width, height: result.height};
+    }
+  } catch {}
+  renderReferences();
 }
 
 function fillResolutions(selected = outputResolution.value) {
@@ -463,7 +559,7 @@ outputAspect.addEventListener('change',() => fillResolutions());
 
 function choosePreset() {
   const custom = modelProfile.value === 'custom';
-  activeFamily = custom ? (customModel.profile || activeFamily) : modelProfile.value === 'default' ? 'z-image-turbo' : modelProfile.value;
+  activeFamily = custom ? (customModel.profile || activeFamily) : modelCatalog.sd_profile_families[modelProfile.value];
   writeSd(custom ? customDraft : modelCatalog.selected.sd_defaults[modelProfile.value]);
   fillComponents(custom ? customModel : {}, !custom);
   modelStatus.textContent = '';
@@ -476,7 +572,7 @@ function fillComponents(selected = {}, preset = false) {
     const expected = modelCatalog.profiles[activeFamily]?.components?.[key] || (key === 'encoder' ? 'qwen3-4b' : family);
     const paths = modelFiles.filter(path => key !== 'vision' && modelCatalog.components[path]?.role === key && modelCatalog.components[path]?.family === expected);
     paths.sort((a,b) => a.slice(a.lastIndexOf('/')+1).localeCompare(b.slice(b.lastIndexOf('/')+1),undefined,{numeric:true,sensitivity:'base'}));
-    select.replaceChildren(new Option(key === 'vision' ? 'Nenhum' : 'Selecione…',''));
+    select.replaceChildren(new Option(key === 'vision' ? 'None' : 'Select…',''));
     for (const path of paths) {
       const option = new Option(path.slice(path.lastIndexOf('/')+1),path);
       option.title = path;
@@ -503,7 +599,7 @@ refreshModels.addEventListener('click', async () => {
     modelRootPaths = catalog.roots;
     fillCatalog(catalog);
     fillComponents(selection);
-    modelStatus.textContent = catalog.errors.join(' · ') || 'Arquivos atualizados.';
+    modelStatus.textContent = catalog.errors.join(' · ') || 'Files refreshed.';
     await loadLibrary();
   } catch (error) { modelStatus.textContent = error.message; }
   finally { configuring = false; setBusy(); }
@@ -521,7 +617,7 @@ const folderDialog = document.querySelector('#folder-dialog');
 let folderMode = 'destination';
 let folderLocation = null;
 function byteSize(bytes) {
-  return `${(Math.max(0,Number(bytes)||0)/1024**3).toLocaleString('pt-BR',{maximumFractionDigits:2})} GiB`;
+  return `${(Math.max(0,Number(bytes)||0)/1024**3).toLocaleString('en-US',{maximumFractionDigits:2})} GiB`;
 }
 function libraryButton(label,handler,disabled=false) {
   const button=document.createElement('button');
@@ -546,13 +642,13 @@ function renderLibraryProgress(data) {
   const bar=document.querySelector('#library-bar');
   if (op.phase==='verifying') bar.removeAttribute('value');
   else bar.value=op.total ? Math.min(100,op.completed/op.total*100) : 0;
-  document.querySelector('#library-operation').textContent=`${op.phase==='verifying'?'Verificando':'Baixando'} · ${op.file || ''} · ${byteSize(op.completed)} / ${byteSize(op.total)}`;
+  document.querySelector('#library-operation').textContent=`${op.phase==='verifying'?'Verifying':'Downloading'} · ${op.file || ''} · ${byteSize(op.completed)} / ${byteSize(op.total)}`;
   document.querySelector('#cancel-model-download').disabled=!active;
   for (const id of ['choose-destination','add-model-folder','download-all']) document.querySelector('#'+id).disabled=active || running;
   document.querySelector('#download-all').disabled ||= !data.destination || !libraryData || Object.values(libraryData.sets).every(s=>s.complete);
   if (op.state==='error') libraryStatus.textContent=op.error;
-  else if(op.state==='cancelled') libraryStatus.textContent='Cancelado. O próximo download continua de onde parou.';
-  else if(op.state==='done') libraryStatus.textContent=op.message || (op.action==='verify'?'Verificação concluída.':'Download concluído.');
+  else if(op.state==='cancelled') libraryStatus.textContent='Canceled. The next download will resume where it stopped.';
+  else if(op.state==='done') libraryStatus.textContent=op.message || (op.action==='verify'?'Verification complete.':'Download complete.');
   if (active && !libraryPollPending) {
     libraryPollPending=true;
     window.setTimeout(async()=>{
@@ -567,7 +663,7 @@ function renderLibraryProgress(data) {
     },900);
   }
 }
-async function loadLibrary() {
+async function loadLibrary(revealCards = false) {
   try {
     const data=await request('/api/library');
     libraryData=data;
@@ -576,29 +672,31 @@ async function loadLibrary() {
     modelRootPaths=data.roots;
     fillCatalog(data.catalog);
     fillComponents(selection);
-    document.querySelector('#model-destination').textContent=data.destination ? `${data.destination}${data.free==null?'':` · ${byteSize(data.free)} livres`}` : 'Escolha a pasta para baixar os modelos.';
+    document.querySelector('#model-destination').textContent=data.destination ? `${data.destination}${data.free==null?'':` · ${byteSize(data.free)} free`}` : 'Choose a folder for model downloads.';
     const folders=document.querySelector('#library-folders');folders.replaceChildren();
     for (const path of data.roots) {
       const row=document.createElement('div');row.className='library-folder';
       const label=document.createElement('span');label.textContent=path;label.title=path;
       row.append(label,libraryButton('×',()=>libraryAction({action:'forget',folder:path}),running || data.operation.state==='running' || data.roots.length===1));
-      row.querySelector('button')?.setAttribute('aria-label',`Remover pasta da biblioteca: ${path}`);
+      row.querySelector('button')?.setAttribute('aria-label',`Remove model folder: ${path}`);
       folders.append(row);
     }
-    const sets=document.querySelector('#library-sets');sets.replaceChildren();
+    const sets=document.querySelector('#library-sets');
+    sets.classList.toggle('reveal-library', revealCards);
+    sets.replaceChildren();
     for (const [family,set] of Object.entries(data.sets)) {
       const card=document.createElement('article');card.className='library-card';
       const title=document.createElement('h3');title.textContent=data.catalog.profiles[family].label;
-      const summary=document.createElement('p');summary.textContent=set.complete?'Disponível':`${Object.keys(set.present).length}/3 componentes · ${byteSize(set.download_bytes)} para baixar`;
+      const summary=document.createElement('p');summary.textContent=set.complete?'Available':`${Object.keys(set.present).length}/3 components · ${byteSize(set.download_bytes)} to download`;
       card.append(title,summary);
       const details=document.createElement('details');
-      const detailsTitle=document.createElement('summary');detailsTitle.textContent='Componentes';details.append(detailsTitle);card.append(details);
+      const detailsTitle=document.createElement('summary');detailsTitle.textContent='Components';details.append(detailsTitle);card.append(details);
       const selections={};
-      for(const [role,label] of [['diffusion','Gerador'],['encoder','Encoder'],['vae','VAE']]) {
+      for(const [role,label] of [['diffusion','Generator'],['encoder','Encoder'],['vae','VAE']]) {
         const row=document.createElement('div');row.className='library-component';
         const caption=document.createElement('label');caption.textContent=label;caption.htmlFor=`library-${family}-${role}`;
         const select=document.createElement('select');select.id=caption.htmlFor;
-        select.add(new Option('Não encontrado',''));
+        select.add(new Option('Not found',''));
         for(const path of set.choices[role]) {const option=new Option(path.split('/').pop(),path);option.title=path;select.add(option);}
         const draft=libraryChoices[family]?.[role];
         select.value=set.choices[role].includes(draft) ? draft : set.present[role] || '';select.disabled=running || data.operation.state==='running';
@@ -607,33 +705,33 @@ async function loadLibrary() {
         function updateLocation() {
           location.textContent=select.value;location.title=select.value;
           const record=data.verification?.[select.value];
-          verification.textContent=record ? ({official:'Padrão confirmado por SHA-256',local:'Inalterado desde a última verificação',changed:'Compatível · Conteúdo alterado desde a última verificação',unconfirmed:'Compatível · Hash de origem desconhecido',failed:'Integridade diferente do arquivo confirmado'}[record.integrity] || '') : '';
+          verification.textContent=record ? ({official:'Official file verified by SHA-256',local:'Unchanged since last verification',changed:'Compatible · Contents changed since last verification',unconfirmed:'Compatible · No known upstream hash',failed:'File checksum differs from the verified checksum'}[record.integrity] || '') : '';
         }
         updateLocation();select.addEventListener('change',()=>{libraryChoices[family] ||= {};libraryChoices[family][role]=select.value;updateLocation();});
         selections[role]=select;row.append(caption,select,location,verification);details.append(row);
       }
       const actions=document.createElement('div');actions.className='library-toolbar';
       const unavailable=running || data.operation.state==='running';
-      actions.append(libraryButton('Escolher',()=>{
+      actions.append(libraryButton('Select',()=>{
         const selected=Object.fromEntries(Object.entries(selections).map(([role,input])=>[role,input.value]));
-        if (Object.values(selected).some(value=>!value)) {libraryStatus.textContent='Localize ou baixe os três componentes.';return;}
+        if (Object.values(selected).some(value=>!value)) {libraryStatus.textContent='Locate or download all three components.';return;}
         activeFamily=family;modelProfile.value=family==='z-image-turbo'?'default':family;choosePreset();fillComponents(selected);
         if (Object.entries(selected).some(([role,path])=>path.split('/').pop()!==data.catalog.model_defaults[family][role])) markSamplingCustom();
-        libraryStatus.textContent=`${data.catalog.profiles[family].label} selecionado. Salve para aplicar.`;
+        libraryStatus.textContent=`${data.catalog.profiles[family].label} selected. Save to apply.`;
       },unavailable || !set.complete));
-      actions.append(libraryButton(set.complete?'Verificar':'Baixar / continuar',()=>{
+      actions.append(libraryButton(set.complete?'Verify':'Download / Resume',()=>{
         const components=Object.fromEntries(Object.entries(selections).map(([role,input])=>[role,input.value]));
-        if(set.complete && Object.values(components).some(value=>!value)){libraryStatus.textContent='Escolha os três componentes para verificar.';return;}
+        if(set.complete && Object.values(components).some(value=>!value)){libraryStatus.textContent='Select all three components for verification.';return;}
         libraryAction({action:set.complete?'verify':'download',families:[family],...(set.complete?{components:{[family]:components}}:{})});
       },unavailable || (!set.complete && !data.destination)));
-      if(Object.values(data.managed).some(r=>r.family===family)) actions.append(libraryButton('Remover download',()=>{
-        if(window.confirm(`Remover os arquivos de ${data.catalog.profiles[family].label} baixados pelo app? Eles serão movidos para .popai-trash na pasta do modelo. Arquivos importados serão preservados.`)) libraryAction({action:'remove',family});
+      if(Object.values(data.managed).some(r=>r.family===family)) actions.append(libraryButton('Remove download',()=>{
+        if(window.confirm(`Remove the downloaded files for ${data.catalog.profiles[family].label}? The app will move them to .popai-trash in the model folder. Imported files will be kept.`)) libraryAction({action:'remove',family});
       },unavailable));
       card.append(actions);sets.append(card);
     }
     if(data.error)libraryStatus.textContent=data.error;
     document.querySelector('#download-all').hidden=Object.values(data.sets).every(set=>set.complete);
-    document.querySelector('#download-all').textContent=`Baixar todos os conjuntos · ${byteSize(Object.values(data.sets).reduce((sum,set)=>sum+set.download_bytes,0))}`;
+    document.querySelector('#download-all').textContent=`Download all model sets · ${byteSize(Object.values(data.sets).reduce((sum,set)=>sum+set.download_bytes,0))}`;
     renderLibraryProgress(data);
     if(data.selection_error)libraryStatus.textContent=data.selection_error;
   } catch(error) {libraryStatus.textContent=error.message;}
@@ -647,7 +745,7 @@ async function browseFolder(path) {
     if(sequence!==folderBrowseSequence)return;
     folderLocation=data;
     document.querySelector('#folder-path').value=data.path;
-    document.querySelector('#folder-status').textContent=`${byteSize(data.free)} livres`;
+    document.querySelector('#folder-status').textContent=`${byteSize(data.free)} free`;
     const list=document.querySelector('#folder-list');list.replaceChildren();
     for(const folder of data.folders)list.append(libraryButton(folder.name,()=>browseFolder(folder.path)));
     document.querySelector('#folder-parent').disabled=data.path===data.parent;
@@ -657,7 +755,7 @@ async function browseFolder(path) {
 let folderBrowseSequence=0;
 async function chooseFolder(mode) {
   folderMode=mode;
-  document.querySelector('#folder-title').textContent=mode==='destination'?'Pasta de download':'Localizar modelos existentes';
+  document.querySelector('#folder-title').textContent=mode==='destination'?'Download folder':'Find existing models';
   folderDialog.showModal();
   await browseFolder(libraryData?.destination || undefined);
 }
@@ -677,10 +775,8 @@ async function openConfig(tab = 'general') {
   libraryChoices = {};
   setBusy();
   selectTab(tab);
-  modelStatus.textContent = 'Carregando…';
-  keepStatus.textContent = '';
+  modelStatus.textContent = 'Loading…';
   modelDialog.showModal();
-  const hardwareRequest = request('/api/hardware').then(data => ({data}),error => ({error}));
   try {
     const catalog = await request('/api/models');
     activeFamily = catalog.selected.profile;
@@ -691,7 +787,7 @@ async function openConfig(tab = 'general') {
     if (!customModel.profile) customModel = {profile:activeFamily,...Object.fromEntries(['diffusion','encoder','vae','vision'].map(key => [key,catalog.selected[key]]))};
     for (const [key, values] of [['sampler',catalog.samplers],['scheduler',catalog.schedulers]]) {
       sdInputs[key].replaceChildren();
-      values.forEach(value => sdInputs[key].add(new Option(value === 'auto' ? 'Automático' : value,value)));
+      values.forEach(value => sdInputs[key].add(new Option(value === 'auto' ? 'Automatic' : value,value)));
     }
     outputAspect.replaceChildren();
     for (const ratio of catalog.aspect_ratios) outputAspect.add(new Option(ratio,ratio));
@@ -703,22 +799,9 @@ async function openConfig(tab = 'general') {
     modelProfile.value = catalog.selected.sd_profile || 'default';
     choosePreset();
     outputResolution.value = catalog.selected.resolution || '1080p';
-    keepLoaded.checked = Boolean(catalog.selected.keep_loaded);
     adaptiveWeights.checked = Boolean(catalog.selected.adaptive_weights);
     modelStatus.textContent = catalog.errors.join(' · ');
-    if (tab === 'models') await loadLibrary();
-    for (const key of ['device','upscale_device','compatibility']) hardwareInputs[key].value = catalog.selected.hardware?.[key] || 'auto';
-    try {
-      const result = await hardwareRequest;
-      if (result.error) throw result.error;
-      const hardware = result.data;
-      for (const key of ['device','upscale_device']) {
-        hardwareInputs[key].replaceChildren(new Option('Automática','auto'));
-        hardware.devices.filter(d => d.usable).forEach(d => hardwareInputs[key].add(new Option(`${d.index}: ${d.name}`,String(d.index))));
-        hardwareInputs[key].value = catalog.selected.hardware?.[key] || 'auto';
-      }
-      hardwareStatus.textContent = `${hardware.selected.generator.name}`;
-    } catch (error) { hardwareStatus.textContent = error.message; }
+    if (tab === 'models') await loadLibrary(true);
   } catch (error) { modelStatus.textContent = error.message; }
   finally { configuring = false; setBusy(); }
 }
@@ -726,33 +809,17 @@ modelButton.addEventListener('click', () => openConfig());
 const adjustConfig = document.querySelector('#adjust-config');
 adjustConfig.addEventListener('click', () => openConfig('sd'));
 
-keepLoaded.addEventListener('change', async () => {
-  if (keepLoaded.checked) return;
-  configuring = true;
-  stopping = true;
-  clearGenerationPreview();
-  setBusy();
-  keepStatus.textContent = 'Cancelando e descarregando…';
-  try {
-    await request('/api/cancel',{method:'POST'});
-    running = false;
-    clockJob = null;
-    keepStatus.textContent = '';
-  } catch (error) { keepStatus.textContent = error.message; }
-  finally { configuring = false; stopping = false; setBusy(); }
-});
-
 cancelGeneration.addEventListener('click', async () => {
   if (stopping) return;
   stopping = true;
   clearGenerationPreview();
   setBusy();
-  status.textContent = 'Cancelando…';
+  status.textContent = 'Canceling…';
   try {
     await request('/api/cancel', {method:'POST'});
     running = false;
     clockJob = null;
-    status.textContent = 'Pedido cancelado · Motor descarregado';
+    status.textContent = 'Generation canceled · Engine unloaded';
   } catch (error) { status.textContent = error.message; }
   finally { stopping = false; setBusy(); }
 });
@@ -761,19 +828,19 @@ modelApply.addEventListener('click', async () => {
   if (busy) return;
   configuring = true;
   setBusy(false);
-  modelStatus.textContent = 'Salvando…';
+  modelStatus.textContent = 'Saving…';
   try {
     if (modelProfile.value === 'custom') {
       customDraft = readSd();
       customModel = {profile:activeFamily,...Object.fromEntries(['diffusion','encoder','vae','vision'].map(key => [key,modelSlots[key].value]))};
     }
-    const settings = {model_roots:modelRootPaths,hardware:{device:hardwareInputs.device.value,upscale_device:hardwareInputs.upscale_device.value,compatibility:hardwareInputs.compatibility.value}, profile:activeFamily, sd_custom_model:customModel, sd_profile:modelProfile.value, sd_custom:customDraft, keep_loaded:keepLoaded.checked, adaptive_weights:adaptiveWeights.checked, resolution:outputResolution.value, aspect_ratio:outputAspect.value, generation_size:generationSize.value, ...Object.fromEntries(Object.entries(modelSlots).map(([key, select]) => [key,select.value]))};
+    const settings = {model_roots:modelRootPaths, profile:activeFamily, sd_custom_model:customModel, sd_profile:modelProfile.value, sd_custom:customDraft, adaptive_weights:adaptiveWeights.checked, resolution:outputResolution.value, aspect_ratio:outputAspect.value, generation_size:generationSize.value, ...Object.fromEntries(Object.entries(modelSlots).map(([key, select]) => [key,select.value]))};
     const saved = await request('/api/models', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(settings)});
     activeFamily = saved.profile;
     modelsReady = true;
     currentFamily = activeFamily;
     modelButton.title = modelCatalog.profiles[activeFamily].label;
-    status.textContent = `${modelButton.title} · ${outputResolution.selectedOptions[0].textContent} · Digite sua ideia e aperte Enter`;
+    status.textContent = `${modelButton.title} · ${outputResolution.selectedOptions[0].textContent} · Enter a prompt and press Enter`;
     modelDialog.close();
   } catch (error) { modelStatus.textContent = error.message; }
   finally { configuring = false; setBusy(false); }
@@ -781,18 +848,18 @@ modelApply.addEventListener('click', async () => {
 
 async function prepareReference(file) {
   if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 20 * 1024 * 1024) {
-    throw new Error('Escolha uma imagem PNG, JPG ou WebP de até 20 MB.');
+    throw new Error('Choose a PNG, JPG, or WebP image up to 20 MB.');
   }
   const image = new Image();
   const url = URL.createObjectURL(file);
   try {
     image.src = url;
     try { await image.decode(); }
-    catch { throw new Error('Não foi possível abrir essa imagem. Escolha outro arquivo.'); }
+    catch { throw new Error('Could not open this image. Choose a different file.'); }
     const width = image.naturalWidth;
     const height = image.naturalHeight;
     if (!width || !height || width > 8192 || height > 8192 || width * height > 16777216) {
-      throw new Error('Use uma imagem de até 8192 pixels por lado e 16 megapixels.');
+      throw new Error('Use an image up to 8192 pixels per side and 16 megapixels.');
     }
     const canvas = document.createElement('canvas');
     canvas.width = width;
@@ -800,7 +867,7 @@ async function prepareReference(file) {
     canvas.getContext('2d').drawImage(image, 0, 0);
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
     if (!blob || blob.size > 25 * 1024 * 1024) {
-      throw new Error('A imagem ficou grande demais. Reduza seu tamanho e tente novamente.');
+      throw new Error('The image is too large. Resize it and try again.');
     }
     return blob;
   } finally {
@@ -818,22 +885,22 @@ referenceFile.addEventListener('change', async () => {
   const files = Array.from(referenceFile.files || []);
   if (!files.length || busy || currentFamily === 'z-image-turbo') return;
   if (references.length + files.length > 10) {
-    status.textContent = 'Anexe até 10 imagens de referência. Remova uma para adicionar outra.';
+    status.textContent = 'You can attach up to 10 reference images. Remove one to add another.';
     return;
   }
   uploading = true;
   setBusy(false);
   stage.classList.remove('error');
-  status.textContent = 'Preparando referência…';
+  status.textContent = 'Preparing reference image…';
   try {
     for (const [index, file] of files.entries()) {
-      status.textContent = `Preparando referência ${index + 1} de ${files.length}…`;
+      status.textContent = `Preparing reference image ${index + 1} of ${files.length}…`;
       const blob = await prepareReference(file);
       const result = await request('/api/reference', {method: 'POST', headers: {'Content-Type': 'image/png'}, body: blob});
       references.push({...result, name: file.name});
       renderReferences();
     }
-    status.textContent = `${references.length} referência(s) pronta(s) · Use imagem 1, imagem 2… no pedido`;
+    status.textContent = `${references.length} attached · Refer to them as image 1, image 2, etc.`;
   } catch (error) {
     stage.classList.add('error');
     status.textContent = error.message;
@@ -844,7 +911,48 @@ referenceFile.addEventListener('change', async () => {
   }
 });
 
-async function showResult(job) {
+function imageDownloadName(id) {
+  const alphabet = 'abcdefghijklmnopqrstuvwxyz';
+  let hash = 2166136261;
+  for (const character of id) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+  let value = hash >>> 0;
+  let code = '';
+  for (let index = 0; index < 6; index++) {
+    code = alphabet[value % alphabet.length] + code;
+    value = Math.floor(value / alphabet.length);
+  }
+  return `popAI-${code}.png`;
+}
+
+function clearResult() {
+  if (!wallpaper.hidden || rememberedResult) {
+    endImageDrag();
+    wallpaper.removeAttribute('src');
+    save.removeAttribute('href');
+    wallpaper.hidden = save.hidden = true;
+    imageViewport.classList.remove('has-image');
+    shown = null;
+    rememberedResult = null;
+    saveComposerSession();
+  }
+}
+
+newGeneration.addEventListener('click', () => {
+  if (newGeneration.disabled) return;
+  const nextSeed = randomSeed();
+  pageSeed = nextSeed === pageSeed ? (pageSeed + 1) & 0x7fffffff : nextSeed;
+  hiddenImageId = latestImageId || shown || hiddenImageId;
+  clearGenerationPreview();
+  clearResult();
+  resultError = null;
+  stage.classList.remove('error');
+  welcome.hidden = false;
+  saveComposerSession();
+  showPromptNotice('Ready for a new generation. Press Enter to generate.');
+  prompt.focus();
+});
+
+async function showResult(job, announce = true) {
   const epoch = previewEpoch;
   const width = job.width || 1920;
   const height = job.height || 1080;
@@ -853,10 +961,10 @@ async function showResult(job) {
   await image.decode();
   if (epoch !== previewEpoch) return false;
   if (image.naturalWidth !== width || image.naturalHeight !== height) {
-    throw new Error('O PNG final não tem as dimensões esperadas.');
+    throw new Error('The final PNG has unexpected dimensions.');
   }
   image.id = 'wallpaper';
-  image.alt = 'Wallpaper gerado';
+  image.alt = 'Generated wallpaper';
   image.draggable = false;
   image.hidden = true;
   clearGenerationPreview(false);
@@ -869,11 +977,13 @@ async function showResult(job) {
   resizeImageView();
   welcome.hidden = true;
   save.href = job.image;
-  save.download = `wallpaper-${width}x${height}.png`;
-  save.setAttribute('aria-label',`Baixar imagem, ${width} por ${height} pixels`);
+  save.download = imageDownloadName(job.id);
+  save.setAttribute('aria-label',`Download image, ${width} by ${height} pixels`);
   save.hidden = false;
   shown = job.id;
-  playCompletionSound(job.id);
+  rememberedResult = {id: job.id, width, height};
+  saveComposerSession();
+  if (announce) playCompletionSound(job.id);
   return true;
 }
 
@@ -891,35 +1001,40 @@ async function refresh() {
     if(jobKey!==observedJobKey || job.state==='running')promptNotice=null;
     observedJobKey=jobKey;
     reconcileReferences(job.missing_references);
-    if (!initialStatusReceived) {
-      initialStatusReceived = true;
-      if (job.state === 'done') hiddenImageId = job.id;
-    }
+    const initialStatus = !initialStatusReceived;
+    initialStatusReceived = true;
+    latestImageId = job.state === 'done' && job.image ? job.id : null;
     stage.classList.remove('error');
     syncClock(job);
-    renderEstimate(job);
     currentFamily = job.profile || currentFamily;
     setBusy(job.state === 'running');
     adjustConfig.hidden = !(job.config_error || job.state === 'error' && job.error_info?.action === 'settings');
     recoverableJob = job.retryable ? job.id : null;
     retryFinalize.hidden = !recoverableJob;
+    if (initialStatus && !latestImageId && !job.preview && rememberedResult) {
+      try {
+        const result = rememberedResult;
+        if (!await showResult({...result, image: `/images/${result.id}.png`}, false)) return;
+      } catch {
+        rememberedResult = null;
+        saveComposerSession();
+      }
+    }
     if (job.config_error && job.state === 'idle') status.textContent = job.config_error;
-    if (!modelDialog.open) keepLoaded.checked = Boolean(job.keep_loaded);
     if (job.state === 'running') {
       showGenerationPreview(job);
-      tickClock();
-    } else if (job.state === 'done' && job.id === hiddenImageId) {
+    } else if (job.state === 'done' && (!job.image || job.id === hiddenImageId)) {
       clearGenerationPreview();
-      status.textContent = 'Digite sua ideia e aperte Enter';
+      status.textContent = 'Enter a prompt and press Enter';
     } else if (job.state === 'done') {
       if (shown !== job.id) {
         try {
-          if (!await showResult(job)) return;
+          if (!await showResult(job, !initialStatus)) return;
           resultError = null;
         } catch (error) {
           clearGenerationPreview();
           shown = job.id;
-          resultError = 'Não foi possível abrir o PNG final. Recarregue a página para tentar novamente; a imagem permanece salva.';
+          resultError = 'Could not open the final PNG. Reload the page to try again.';
           shown = null;
           save.hidden = true;
         }
@@ -928,16 +1043,16 @@ async function refresh() {
         stage.classList.add('error');
         status.textContent = resultError;
       } else {
-        status.textContent = `Pronto em ${formatDuration(job.elapsed)} · Digite outra ideia para criar mais`;
+        status.textContent = `Ready · Total ${formatDuration(job.elapsed)}`;
       }
     } else if (job.state === 'error') {
       clearGenerationPreview();
       stage.classList.add('error');
       status.textContent = job.error;
-      modelButton.title = 'Ajustar configurações';
+      modelButton.title = 'Adjust settings';
     } else if (job.state === 'cancelled') {
       clearGenerationPreview();
-      status.textContent = 'Pedido cancelado · Digite outra ideia para criar mais';
+      status.textContent = 'Generation canceled · Enter another prompt to create more';
     } else {
       clearGenerationPreview();
     }
@@ -950,7 +1065,7 @@ async function refresh() {
     stage.classList.add('error');
     clockJob = null;
     timeEstimate.hidden = true;
-    status.textContent = 'Sem conexão com o servidor. Tentando reconectar…';
+    status.textContent = 'Server disconnected. Reconnecting…';
     setBusy(true);
   } finally {
     window.setTimeout(refresh, clockJob?.phase === 'generating' ? 350 : 1500);
@@ -968,7 +1083,49 @@ prompt.addEventListener('keydown',event => {
   if (!busy && !event.repeat && prompt.value.trim()) form.requestSubmit();
 });
 window.addEventListener('resize',resizePrompt);
-window.addEventListener('pagehide',event=>{if(!enhancing)savePromptDraft();if(!event?.persisted)releaseReferences(references.map(r=>r.id),true);});
+const composer = document.querySelector('.composer');
+const composerFields = document.querySelector('#composer-fields');
+const composerStatus = document.querySelector('.composer-status');
+const expandComposer = document.querySelector('#expand-composer');
+let composerIdleTimer;
+let composerStatusHovered = false;
+
+function setComposerCollapsed(collapsed) {
+  composer.classList.toggle('is-collapsed', collapsed);
+  composerFields.inert = collapsed;
+  expandComposer.hidden = !collapsed;
+}
+
+function scheduleComposerCollapse() {
+  window.clearTimeout(composerIdleTimer);
+  if (composerFields.inert || composerStatusHovered || composer.contains(document.activeElement)) return;
+  composerIdleTimer = window.setTimeout(() => {
+    if (!composer.contains(document.activeElement)) setComposerCollapsed(true);
+  }, 5000);
+}
+
+composer.addEventListener('pointerdown', scheduleComposerCollapse);
+composer.addEventListener('focusin', scheduleComposerCollapse);
+composer.addEventListener('focusout', () => queueMicrotask(scheduleComposerCollapse));
+composerStatus.addEventListener('pointerenter', event => {
+  if (event.pointerType === 'touch') return;
+  composerStatusHovered = true;
+  if (composerFields.inert) setComposerCollapsed(false);
+  scheduleComposerCollapse();
+});
+composerStatus.addEventListener('pointerleave', event => {
+  if (event.pointerType === 'touch') return;
+  composerStatusHovered = false;
+  scheduleComposerCollapse();
+});
+expandComposer.addEventListener('click', () => {
+  setComposerCollapsed(false);
+  if (!prompt.disabled) prompt.focus();
+  scheduleComposerCollapse();
+});
+window.addEventListener('load', scheduleComposerCollapse, {once: true});
+
+window.addEventListener('pagehide',()=>{if(!enhancing)savePromptDraft();});
 window.addEventListener('pageshow',event=>{
   if(event.persisted && references.length)request('/api/status?references='+encodeURIComponent(references.map(r=>r.id).join(',')))
     .then(job=>reconcileReferences(job.missing_references)).catch(()=>{});
@@ -986,6 +1143,7 @@ try {
     if(savedPrompt!==null)prompt.value=savedPrompt.slice(0,limit);
   }
 } catch {}
+restoreComposerSession();
 resizePrompt();
 updateMascot();
 
@@ -998,9 +1156,9 @@ form.addEventListener('submit', async event => {
   clearGenerationPreview();
   setBusy(true);
   stage.classList.remove('error');
-  status.textContent = 'Iniciando…';
+  status.textContent = 'Starting…';
   try {
-    await request('/api/generate', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({prompt: prompt.value.trim(), reference: references.map(reference => reference.id)})});
+    await request('/api/generate', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({prompt: prompt.value.trim(), seed: pageSeed, reference: references.map(reference => reference.id)})});
   } catch (error) {
     setBusy(false);
     stage.classList.add('error');

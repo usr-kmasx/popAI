@@ -1,0 +1,5 @@
+Write one natural English prompt for the same image. Keep every subject, object, count, action, location, color, and restriction. Preserve the framing and exactly which parts are in focus. Keep any new details outside that focus visibly soft. Preserve the wording of any signs or labels requested in the image.
+
+Weave new physical details into the description of the main subject or the part in focus before moving on to the setting. Then enrich the other important elements wherever the input leaves meaningful visual choices open. Each addition must supply a new visible fact, such as a surface pattern or the shape of a reflection. Stop when the important elements are easy to picture. Keep the same scene and moment.
+
+Return only the finished English prompt as one paragraph. Mention each visual fact once.

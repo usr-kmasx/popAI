@@ -77,3 +77,53 @@ Três pedidos inéditos com Z-Image verificaram o primeiro carregamento e mais d
 | flux3-klein · 1 | 23.17 / 22.67 s | 40.13 / 38.65 s |
 
 Os tempos mistos não demonstram aceleração consistente. A tentativa separada de converter W1 e W3 das quatro primeiras camadas para FP32 aumentou a memória dos parâmetros de difusão em 881 MiB e alterou os pixels nos três pares do Z-Image. Ela foi descartada. Dados locais em `logs/perfil-2x-181126/pesos-preparados-pares.jsonl` e `pesos-ui-klein.jsonl`.
+
+## Passagem direta entre passos do Z-Image
+
+A primeira etapa do plano mediu o caminho atual. O patch [trace-zimage-euler.patch](trace-zimage-euler.patch) adiciona um registro por passo com `POPAI_TRACE_EULER=1`. Aplique o patch com `patch -p1` em uma cópia do fonte do stable-diffusion.cpp e compile os executáveis dessa cópia com o Vulkan. Para esta medição, recompilamos e religamos `execution_engine.cpp` e `diffusion_engine.cpp` em executáveis isolados, usando as opções e bibliotecas da compilação atual. Os executáveis do app ficaram fora do experimento.
+
+O Z-Image Turbo Q8 usou Euler, nove passos, CFG 1, preview projetado em cada passo, offload para RAM e a política Vulkan padrão da RX 580. O primeiro pedido, de 256 × 144, abriu o motor residente. O segundo, de 960 × 544 (Padrão), usou o mesmo motor com outro prompt. Ambos passaram pela ampliação e publicaram um PNG de 1280 × 720.
+
+| Soma dos nove passos | 256 × 144 | 960 × 544 |
+| --- | ---: | ---: |
+| Leitura da saída do modelo para RAM | 0,671 ms | 2,119 ms |
+| Envio do latente de entrada | 0,038 ms | 0,459 ms |
+| Escalas e combinação na RAM | 0,111 ms | 1,811 ms |
+| Atualização de Euler na RAM | 0,092 ms | 1,132 ms |
+| **Subtotal da passagem** | **0,912 ms** | **5,521 ms** |
+| Produção do preview e callback | 1,423 ms | 15,727 ms |
+| Sincronizações explícitas após submissão e no fim do último segmento | 14,924 ms | 21,031 ms |
+| **Soma incluindo preview e sincronizações** | **17,259 ms** | **42,279 ms** |
+| Tempo até a imagem base | 27,69 s | 133,12 s |
+| Tempo até o PNG | 41,17 s | 145,11 s |
+| Pico de VRAM da placa inteira | 7,33 GiB | 7,26 GiB |
+
+As sincronizações medidas podem incluir espera por cálculos necessários. A soma também não inclui esperas internas durante a execução serializada das operações Vulkan. Esse tempo pertence à execução do grafo e exigiria outro experimento para avaliar sobreposição. Em 960 × 544, a leitura da saída transferiu 522.240 bytes por passo. O envio do latente foi medido também quando ocorreu em memória acessível pela CPU.
+
+A base e o PNG do pedido pequeno coincidiram em SHA-256 dos pixels RGB com o registro anterior do mesmo prompt, seed 2065121 e configuração. Essa comparação valida a instrumentação. A geração no Padrão mediu custo, sem comparação com uma implementação de dois buffers.
+
+Mesmo incluindo preview e sincronizações explícitas, o total medido no Padrão equivaleu a cerca de 0,032% do tempo até a base. A meta de 10% representaria 13,31 s nesse pedido. Encerramos na etapa de medição conforme o critério do plano. A passagem com dois buffers e o botão ficaram fora do app. Dados por passo em `logs/perfil-2x-181126/execucao/trace-euler-z-image-turbo-stock/resident.log` e tempos e hashes em `logs/perfil-2x-181126/passagem-euler-controle.jsonl`.
+
+## Sobreposição do fim e do começo de passos consecutivos
+
+Medimos um pedido Z-Image Turbo Q8 com Euler, nove passos, base de 960 × 544, preview por passo e ampliação até 1280 × 720 na RX 580. Usamos a seed `5240132` e o mesmo prompt do pedido de referência em resolução Padrão. O controle de compatibilidade Vulkan continuou ativo. Os hashes RGB da base e do PNG final coincidiram com os da referência.
+
+Aplicamos [trace-vulkan-operation-order.patch](trace-vulkan-operation-order.patch) e [trace-zimage-euler.patch](trace-zimage-euler.patch) apenas aos executáveis de diagnóstico. O primeiro expõe os timestamps em ordem quando `POPAI_TRACE_VULKAN_ORDER=1` e `GGML_VK_PERF_LOGGER=1`. Usamos o modo não concorrente do profiler para identificar cada operação. O segundo registra a fronteira de cada passo com `POPAI_TRACE_EULER=1`. Entre o início da amostragem e cada marcador conferimos 1.289 operações e 34 atenções sobre a imagem por passo. Quatro atenções do refinador cobriram as 2.048 posições de imagem com padding. Trinta atenções conjuntas cobriram 2.080 posições, incluindo o texto.
+
+Para cada transição, comparamos o intervalo entre a última atenção global e a saída do passo anterior com o intervalo entre a entrada do passo seguinte e sua primeira atenção global. Os intervalos da tabela incluem as lacunas entre operações, além do trabalho que poderia ter dependências mais restritivas. Usar o menor dos dois intervalos é uma estimativa otimista do tempo que poderia ser escondido por essa sobreposição.
+
+| Transição | Fim do passo anterior | Início do passo seguinte | Sobreposição ideal |
+| --- | ---: | ---: | ---: |
+| 1 → 2 | 248,083 ms | 83,147 ms | 83,147 ms |
+| 2 → 3 | 243,533 ms | 107,636 ms | 107,636 ms |
+| 3 → 4 | 263,529 ms | 85,048 ms | 85,048 ms |
+| 4 → 5 | 248,186 ms | 88,688 ms | 88,688 ms |
+| 5 → 6 | 250,871 ms | 109,933 ms | 109,933 ms |
+| 6 → 7 | 250,553 ms | 103,324 ms | 103,324 ms |
+| 7 → 8 | 260,650 ms | 98,900 ms | 98,900 ms |
+| 8 → 9 | 267,114 ms | 85,248 ms | 85,248 ms |
+| **Total ideal** | | | **761,924 ms** |
+
+A referência levou 133,12 s até a base. A meta de 10% equivale a 13,31 s nesse pedido. A janela total equivale a 0,57% e ficou abaixo também do mínimo absoluto de 2 s. Os 129,95 s do pedido instrumentado são um tempo de diagnóstico, com outro estado do motor, e não representam ganho de sobreposição. O experimento encerrou antes do protótipo de execução paralela. O aplicativo e os executáveis de produção ficaram fora da mudança.
+
+Registros em `logs/perfil-2x-181126/execucao/trace-vulkan-overlap-z-image-turbo-stock/resident.log`, `sobreposicao-vulkan-limite.json` e `sobreposicao-vulkan-controle.jsonl`.

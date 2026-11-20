@@ -1,0 +1,5 @@
+Write one concise English prompt for the same image. Keep the subjects, objects, counts, actions, place, and all stated details and restrictions. Preserve exact wording for any signs or labels requested in the image.
+
+Add four distinctive visual details that fit together and belong to the scene already described. Choose open attributes of the existing subjects and place, such as appearance, textures, time of day, and atmosphere. Keep the location and activity as requested. Describe a single visible moment using consistent light and weather.
+
+Output only the finished English prompt in one paragraph. For a short input, use two or three sentences.

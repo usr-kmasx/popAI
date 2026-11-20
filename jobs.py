@@ -32,7 +32,7 @@ class JobStore:
 
     def save(self, job):
         if not ID.fullmatch(job['id']):
-            raise ValueError('Identificador do pedido inválido.')
+            raise ValueError('Invalid job ID.')
         data = copy.deepcopy(job)
         for key in PATH_FIELDS:
             if data.get('settings',{}).get(key):

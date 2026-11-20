@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 200 200" fill="none">
-<title>Mascote popAI</title>
+<title>popAI mascot</title>
 <style>        @keyframes floatIdle {
             0%, 100% { transform: translateY(0px) rotate(0deg); }
             50% { transform: translateY(-6px) rotate(0.5deg); }

@@ -10,14 +10,14 @@ GiB = 1024 ** 3
 
 def normalize(settings):
     if not isinstance(settings, dict) or set(settings) - set(HARDWARE_DEFAULTS):
-        raise ValueError('Configuração de hardware inválida.')
+        raise ValueError('Invalid hardware settings.')
     value = {**HARDWARE_DEFAULTS, **settings}
     for key in ('device', 'upscale_device'):
         choice = value[key]
         if not isinstance(choice, str) or not (choice == 'auto' or re.fullmatch(r'\d+', choice)):
-            raise ValueError('Escolha automático ou o índice Vulkan da GPU.')
+            raise ValueError('Select Auto or enter the GPU Vulkan index.')
     if value['compatibility'] not in ('auto', 'on', 'off'):
-        raise ValueError('Compatibilidade deve ser automática, ligada ou desligada.')
+        raise ValueError('Set compatibility to Auto, On, or Off.')
     return value
 
 
@@ -39,7 +39,7 @@ def discover(executable):
         ggml = subprocess.run([str(executable), '--list-devices'], capture_output=True, text=True, env=env, timeout=30, check=True)
         mapping = re.findall(r'^(Vulkan\d+)\t(.+)$', ggml.stdout, re.M)
     except (OSError, subprocess.SubprocessError, ValueError) as exc:
-        raise RuntimeError(f'Não foi possível consultar o Vulkan. Confira o driver da GPU: {exc}') from exc
+        raise RuntimeError(f'Could not query Vulkan. Check the GPU driver. Details: {exc}') from exc
     for device in devices:
         matches = [key for key, name in mapping if name == device['name']]
         physical = [d for d in devices if d['name'] == device['name']]
@@ -54,13 +54,13 @@ def select(devices, settings):
     def pick(choice):
         if choice == 'auto':
             if not usable:
-                raise ValueError('Nenhuma GPU Vulkan compatível foi encontrada nos executores. Confira o driver.')
+                raise ValueError('The backends found no compatible Vulkan GPU. Check the GPU driver.')
             return max(usable, key=lambda d: (d['type'] == 2, d['free'] if d['free'] is not None else d['total']))
         matches = [d for d in devices if str(d['index']) == choice and d['type'] in (1, 2)]
         if not matches:
-            raise ValueError('A GPU selecionada não está disponível.')
+            raise ValueError('The selected GPU is unavailable.')
         if not matches[0]['ggml']:
-            raise ValueError('Identidade da GPU ambígua entre Vulkan e gerador. Use GPUs com nomes distintos ou desative a outra GPU no driver.')
+            raise ValueError('The generator cannot uniquely match the GPU to a Vulkan device. Use GPUs with distinct names or disable the other GPU in the driver.')
         return matches[0]
     generator, upscaler = pick(settings['device']), pick(settings['upscale_device'])
     compatibility = settings['compatibility'] == 'on' or (settings['compatibility'] == 'auto' and 'POLARIS' in generator['name'].upper() and 'RADV' in generator['name'].upper())
