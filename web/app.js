@@ -176,9 +176,18 @@ imageViewport.addEventListener('keydown',event => {
 const welcome = document.querySelector('#welcome');
 const save = document.querySelector('#save');
 const addReference = document.querySelector('#add-reference');
+const drawReference = document.querySelector('#draw-reference');
+const sketchDialog = document.querySelector('#sketch-dialog');
+const sketchFrame = document.querySelector('#sketch-frame');
 const referenceFile = document.querySelector('#reference-file');
 const referencePreview = document.querySelector('#reference-preview');
+const referenceDialog = document.querySelector('#reference-dialog');
+const referenceLarge = document.querySelector('#reference-large');
+const referenceClose = document.querySelector('#reference-close');
 const modelButton = document.querySelector('#model-button');
+const modelControl = document.querySelector('#model-control');
+const modelOptions = document.querySelector('#model-options');
+const hideComposer = document.querySelector('#hide-composer');
 const modelDialog = document.querySelector('#model-dialog');
 const modelProfile = document.querySelector('#model-profile');
 const modelStatus = document.querySelector('#model-status');
@@ -355,6 +364,10 @@ async function request(path, options) {
   return body;
 }
 
+function canImprovePrompt() {
+  return !busy && ['ready','error','stopped'].includes(enhancerState.state) && !enhancerState.busy && !!prompt.value.trim();
+}
+
 function setBusy(value = running) {
   running = value;
   busy = value || uploading || configuring || enhancing;
@@ -366,6 +379,8 @@ function setBusy(value = running) {
   retryFinalize.disabled = busy;
   prompt.disabled = busy;
   addReference.disabled = busy || currentFamily === 'z-image-turbo';
+  drawReference.hidden = currentFamily === 'z-image-turbo';
+  drawReference.disabled = busy || !modelsReady || references.length >= 10;
   addReference.hidden = false;
   addReference.title = currentFamily !== 'z-image-turbo' ? 'Add reference image' : 'Reference images are unavailable for this model';
   referencePreview.querySelectorAll('button').forEach(button => { button.disabled = busy; });
@@ -381,11 +396,14 @@ function setBusy(value = running) {
   stage.classList.toggle('busy', busy);
   form.setAttribute('aria-busy', String(busy));
   enhanceControl.hidden = busy;
-  undoEnhance.hidden = busy || undoPrompt === null;
-  undoEnhance.disabled = busy;
-  enhancePrompt.disabled = busy || !['ready','error','stopped'].includes(enhancerState.state) || enhancerState.busy || !prompt.value.trim();
+  const canImprove = canImprovePrompt();
+  const canUndo = !busy && undoPrompt !== null;
+  undoEnhance.hidden = !canUndo;
+  undoEnhance.disabled = !canUndo;
+  enhanceOptions.querySelectorAll('button[data-mode]').forEach(option => { option.disabled = !canImprove; });
+  enhancePrompt.disabled = !canImprove && !canUndo;
   if (enhancePrompt.disabled) setEnhanceOptions(false);
-  enhancePrompt.title = enhancing ? 'Enhancing prompt…' : enhancerState.state === 'ready' ? 'Enhance prompt' : enhancerState.state==='error' || enhancerState.state==='stopped' ? 'Retry prompt enhancement' : 'Loading prompt enhancer…';
+  enhancePrompt.title = !canImprove && canUndo ? 'Undo prompt enhancement' : enhancing ? 'Enhancing prompt…' : enhancerState.state === 'ready' ? 'Enhance prompt' : enhancerState.state==='error' || enhancerState.state==='stopped' ? 'Retry prompt enhancement' : 'Loading prompt enhancer…';
   enhancePrompt.classList.toggle('enhancing',enhancing);
   enhancePrompt.setAttribute('aria-busy',String(enhancing));
   cancelEnhance.hidden = !enhancing;
@@ -425,7 +443,7 @@ enhanceOptions.addEventListener('click', event => {
 });
 
 async function improvePrompt(mode) {
-  if (enhancePrompt.disabled) return;
+  if (!canImprovePrompt()) return;
   const original=prompt.value;
   const originalUndo=undoPrompt;
   savePromptDraft();
@@ -467,9 +485,31 @@ cancelEnhance.addEventListener('click',()=>{
 });
 undoEnhance.addEventListener('click',()=>{
   if(busy || undoPrompt===null)return;
+  setEnhanceOptions(false);
   prompt.value=undoPrompt;undoPrompt=null;undoEnhance.hidden=true;savePromptDraft();resizePrompt();setBusy();prompt.focus();showPromptNotice('Original text restored');
 });
 
+function validSketchState(state) {
+  if (!state || state.version !== 1 || !Array.isArray(state.items) || state.items.length > 1500) return false;
+  if (state.base != null && (typeof state.base !== 'string' ||
+      state.base.length > 1600000 || !/^data:image\/png;base64,[a-zA-Z0-9+/=]+$/.test(state.base))) return false;
+  try { return JSON.stringify(state).length <= 2000000; } catch { return false; }
+}
+function isSketchReference(reference) {
+  return !!reference.sketch || reference.name === 'Sketch 4:3';
+}
+function openReferencePreview(reference) {
+  referenceLarge.src = reference.image;
+  referenceLarge.alt = reference.name;
+  referenceDialog.showModal();
+}
+referenceClose.addEventListener('click', () => referenceDialog.close());
+referenceDialog.addEventListener('click', event => {
+  if (event.target === referenceDialog) referenceDialog.close();
+});
+referenceDialog.addEventListener('close', () => {
+  referenceLarge.removeAttribute('src');
+});
 const discardedReferences=new Set();
 let releasingReferences=false;
 function releaseReferences(ids) {
@@ -495,9 +535,20 @@ function renderReferences() {
   references.forEach((reference, index) => {
     const item = document.createElement('div');
     item.className = 'reference-item';
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'reference-open';
+    open.setAttribute('aria-label', isSketchReference(reference) ? `Edit sketch ${index + 1}` : `Preview image ${index + 1}`);
+    open.title = isSketchReference(reference) ? 'Edit drawing' : 'Preview image';
+    if (isSketchReference(reference)) open.dataset.sketch = 'true';
     const image = document.createElement('img');
     image.src = reference.image;
     image.alt = `Image ${index + 1}: ${reference.name}`;
+    open.append(image);
+    open.addEventListener('click', () => {
+      if (isSketchReference(reference) && !busy && currentFamily !== 'z-image-turbo') openSketch(reference);
+      else openReferencePreview(reference);
+    });
     const number = document.createElement('span');
     number.className = 'reference-number';
     number.textContent = String(index + 1);
@@ -514,10 +565,11 @@ function renderReferences() {
       status.textContent = references.length ? `${references.length} attached · Describe the edit and press Enter` : 'Enter a prompt and press Enter';
       prompt.focus();
     });
-    item.append(image, number, remove);
+    item.append(open, number, remove);
     referencePreview.append(item);
   });
   referencePreview.hidden = !references.length;
+  drawReference.disabled = busy || !modelsReady || references.length >= 10;
   prompt.placeholder = references.length ? 'Describe the edit you want…' : 'Describe your image…';
   saveComposerSession();
 }
@@ -525,7 +577,7 @@ function renderReferences() {
 function saveComposerSession() {
   try {
     window.sessionStorage.setItem(composerSessionKey, JSON.stringify({
-      references: references.map(({id, name}) => ({id, name})),
+      references: references.map(({id, name, sketch}) => ({id, name, ...(sketch && validSketchState(sketch) ? {sketch} : {})})),
       hiddenImageId,
       result: rememberedResult,
     }));
@@ -540,7 +592,7 @@ function restoreComposerSession() {
       references = saved.references
         .filter(item => typeof item?.id === 'string' && assetId.test(item.id) && typeof item.name === 'string')
         .slice(0, 10)
-        .map(({id, name}) => ({id, name, image: `/references/${id}.png`}));
+        .map(({id, name, sketch}) => ({id, name, image: `/references/${id}.png`, ...(validSketchState(sketch) ? {sketch} : {})}));
     }
     if (typeof saved.hiddenImageId === 'string' && assetId.test(saved.hiddenImageId)) hiddenImageId = saved.hiddenImageId;
     const result = saved.result;
@@ -807,7 +859,34 @@ async function openConfig(tab = 'general') {
   } catch (error) { modelStatus.textContent = error.message; }
   finally { configuring = false; setBusy(); }
 }
-modelButton.addEventListener('click', () => openConfig());
+function setModelOptions(open) {
+  const visible = open && !modelButton.disabled;
+  modelOptions.hidden = !visible;
+  modelButton.setAttribute('aria-expanded', String(visible));
+}
+modelControl.addEventListener('pointerenter', event => {
+  if (event.pointerType !== 'touch') setModelOptions(true);
+});
+modelControl.addEventListener('pointerleave', () => {
+  if (!modelOptions.contains(document.activeElement)) setModelOptions(false);
+});
+modelControl.addEventListener('focusout', event => {
+  if (!modelControl.contains(event.relatedTarget)) setModelOptions(false);
+});
+modelControl.addEventListener('keydown', event => {
+  if (event.key !== 'Escape' || modelOptions.hidden) return;
+  event.preventDefault();
+  setModelOptions(false);
+  modelButton.focus();
+});
+document.addEventListener('pointerdown', event => {
+  if (!modelOptions.hidden && !modelControl.contains(event.target)) setModelOptions(false);
+});
+modelButton.addEventListener('click', () => { setModelOptions(false); openConfig(); });
+hideComposer.addEventListener('click', () => {
+  setModelOptions(false);
+  setComposerCollapsed(true);
+});
 const adjustConfig = document.querySelector('#adjust-config');
 adjustConfig.addEventListener('click', () => openConfig('sd'));
 
@@ -876,6 +955,104 @@ async function prepareReference(file) {
     URL.revokeObjectURL(url);
   }
 }
+
+let editingSketchId = null;
+let initialSketchState = null;
+async function openSketch(reference = null) {
+  if (busy || !modelsReady || currentFamily === 'z-image-turbo' ||
+      (!reference && references.length >= 10) || sketchDialog.open) return;
+  let state = validSketchState(reference?.sketch) ? reference.sketch : null;
+  if (reference && !state) {
+    // Older drawings were stored only as PNG. Reopen one as an editable
+    // flattened background; only new objects will have independent selection.
+    try {
+      const response = await fetch(reference.image);
+      if (!response.ok) throw new Error('Missing drawing');
+      const png = await response.blob();
+      if (png.type !== 'image/png' || !png.size || png.size > 1100000) throw new Error('Drawing too large');
+      const base = await new Promise((resolve,reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('Could not read drawing'));
+        reader.readAsDataURL(png);
+      });
+      state = {version:1,items:[],base};
+      if (!validSketchState(state)) throw new Error('Drawing cannot be restored');
+    } catch {
+      openReferencePreview(reference);
+      showPromptNotice('This older sketch is available as an image preview only.');
+      return;
+    }
+  }
+  if (reference && !references.some(item => item.id === reference.id)) return;
+  editingSketchId = reference?.id || null;
+  initialSketchState = state;
+  sketchFrame.src = '/sketch.html';
+  sketchDialog.showModal();
+}
+drawReference.addEventListener('click', () => openSketch());
+sketchFrame.addEventListener('load', () => {
+  if (!sketchDialog.open) return;
+  sketchFrame.contentWindow?.postMessage({
+    type:'popai-sketch:load', state:initialSketchState
+  }, window.location.origin);
+});
+sketchDialog.addEventListener('close', () => {
+  sketchFrame.removeAttribute('src');
+  editingSketchId = null;
+  initialSketchState = null;
+});
+window.addEventListener('message', async event => {
+  if (event.origin !== window.location.origin || event.source !== sketchFrame.contentWindow || !sketchDialog.open) return;
+  if (event.data?.type === 'popai-sketch:close') {
+    sketchDialog.close();
+    return;
+  }
+  if (event.data?.type !== 'popai-sketch:submit') return;
+  const blob = event.data.blob;
+  const state = event.data.state;
+  if (!(blob instanceof Blob) || blob.type !== 'image/png' || !blob.size ||
+      blob.size > 25 * 1024 * 1024 || !validSketchState(state)) {
+    sketchDialog.close();
+    showPromptNotice('The sketch could not be saved as an editable PNG.');
+    return;
+  }
+  const previousId = editingSketchId;
+  if (busy || !modelsReady || currentFamily === 'z-image-turbo' ||
+      (previousId ? !references.some(reference => reference.id === previousId) : references.length >= 10)) {
+    sketchDialog.close();
+    showPromptNotice('This model cannot accept another reference image.');
+    return;
+  }
+  sketchDialog.close();
+  uploading = true;
+  setBusy(false);
+  stage.classList.remove('error');
+  status.textContent = previousId ? 'Updating drawing…' : 'Attaching drawing…';
+  try {
+    const result = await request('/api/reference', {method:'POST', headers:{'Content-Type':'image/png'}, body:blob});
+    if (previousId) {
+      const index = references.findIndex(reference => reference.id === previousId);
+      if (index < 0) {
+        releaseReferences([result.id]);
+        throw new Error('The original drawing is no longer attached.');
+      }
+      references.splice(index,1,{...result,name:'Sketch 4:3',sketch:state});
+      releaseReferences([previousId]);
+    } else {
+      references.push({...result,name:'Sketch 4:3',sketch:state});
+    }
+    renderReferences();
+    status.textContent = `${references.length} attached · Describe the edit and press Enter`;
+  } catch (error) {
+    stage.classList.add('error');
+    status.textContent = error.message;
+  } finally {
+    uploading = false;
+    setBusy(false);
+    prompt.focus();
+  }
+});
 
 addReference.addEventListener('click', () => {
   if (busy || currentFamily === 'z-image-turbo') return;
@@ -1088,44 +1265,17 @@ window.addEventListener('resize',resizePrompt);
 const composer = document.querySelector('.composer');
 const composerFields = document.querySelector('#composer-fields');
 const composerMessage = document.querySelector('.composer-message');
-const expandComposer = document.querySelector('#expand-composer');
-let composerIdleTimer;
-let composerMessageHovered = false;
-
 function setComposerCollapsed(collapsed) {
   composer.classList.toggle('is-collapsed', collapsed);
   composerFields.inert = collapsed;
-  expandComposer.hidden = !collapsed;
 }
 
-function scheduleComposerCollapse() {
-  window.clearTimeout(composerIdleTimer);
-  if (composerFields.inert || composerMessageHovered || composer.contains(document.activeElement)) return;
-  composerIdleTimer = window.setTimeout(() => {
-    if (!composer.contains(document.activeElement)) setComposerCollapsed(true);
-  }, 5000);
-}
-
-composer.addEventListener('pointerdown', scheduleComposerCollapse);
-composer.addEventListener('focusin', scheduleComposerCollapse);
-composer.addEventListener('focusout', () => queueMicrotask(scheduleComposerCollapse));
 composerMessage.addEventListener('pointerenter', event => {
-  if (event.pointerType === 'touch') return;
-  composerMessageHovered = true;
+  if (event.pointerType !== 'touch' && composerFields.inert) setComposerCollapsed(false);
+});
+composerMessage.addEventListener('pointerdown', () => {
   if (composerFields.inert) setComposerCollapsed(false);
-  scheduleComposerCollapse();
 });
-composerMessage.addEventListener('pointerleave', event => {
-  if (event.pointerType === 'touch') return;
-  composerMessageHovered = false;
-  scheduleComposerCollapse();
-});
-expandComposer.addEventListener('click', () => {
-  setComposerCollapsed(false);
-  if (!prompt.disabled) prompt.focus();
-  scheduleComposerCollapse();
-});
-window.addEventListener('load', scheduleComposerCollapse, {once: true});
 
 window.addEventListener('pagehide',()=>{if(!enhancing)savePromptDraft();});
 window.addEventListener('pageshow',event=>{

@@ -22,3 +22,9 @@ logs/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Temporary headless Chromium / local fixture artifacts
+prototypes/.integrated-*/
+prototypes/.test-browser-*/
+prototypes/.test-sketch-server.pid
+prototypes/.test-sketch-server.log

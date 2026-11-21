@@ -22,6 +22,7 @@ ENHANCER_MODES = {
                  'Add new, concrete visual details the original does not specify. Develop the main subject and any other important elements with room for detail.'),
     'creative': ('prompt-enhancer-creative.txt', .55,
                  'Give the stated scene four new visual details that fit together.'),
+    'cinematic': ('prompt-enhancer-cinematic.txt', .4, ''),
 }
 
 
@@ -114,7 +115,7 @@ class PromptEnhancer:
             raise ValueError('Enter a valid description before enhancing the prompt.')
         if not isinstance(editing,bool):raise ValueError('Invalid request type.')
         if not isinstance(mode, str) or mode not in ENHANCER_MODES:
-            raise ValueError('Choose Simple, More details, or Creative.')
+            raise ValueError('Choose Simple, More details, Creative, or Cinematic Art.')
         if not self.request_lock.acquire(blocking=False):raise RuntimeError('A prompt is already being enhanced.')
         try:
             with self.lock:

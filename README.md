@@ -1,5 +1,7 @@
 # popAI
 
+**Current release: 21.11.26** · [Release notes](docs/release-21.11.26.md)
+
 Generate, edit, and upscale wallpapers locally on Linux. popAI runs image models
 on Vulkan and exports PNGs up to 4K UHD at 16:9. It serves its interface in your
 browser and runs inference on your computer.
@@ -15,8 +17,13 @@ browser and runs inference on your computer.
 - Live progress and previews. The total includes preparation, generation,
   upscaling, and PNG finalization. The clock shows an estimate for the current
   stage when progress data is available.
-- Optional CPU-only prompt enhancement with **Simple**, **More details**, and
-  **Creative** modes, plus undo and cancellation.
+- Optional CPU-only prompt enhancement with **Simple**, **More details**,
+  **Creative**, and **Cinematic Art** modes, plus undo and cancellation.
+- Built-in 4:3 sketch editor for Klein reference images: freehand strokes, text,
+  rectangles, ellipses, straight lines, and arrows; selection, resizing,
+  undo/redo, and re-editing from the reference thumbnail.
+- Click uploaded reference thumbnails to inspect them in a larger preview.
+  Hide the prompt manually to view a generated image without the input overlay.
 
 ## Getting started
 
@@ -29,7 +36,7 @@ direct PNG writer also uses libpng development headers.
 Clone the release and open the project folder.
 
 ```bash
-git clone --branch 20.11.26 https://github.com/usr-kmasx/popAI.git
+git clone --branch 21.11.26 https://github.com/usr-kmasx/popAI.git
 cd popAI
 ```
 
@@ -55,9 +62,13 @@ FLUX 3 Image Klein. To add a model directory at launch, pass
 
 1. Choose a profile in **Settings → Stable Diffusion** and select a size,
    aspect ratio, and output resolution in **Resolution**.
-2. Enter a prompt and press **Enter**. With a Klein profile, use **+** to
-   attach reference images and describe the edit.
-3. When the final PNG appears, drag to pan, use the mouse wheel to zoom, or
+2. Enter a prompt and press **Enter**, or use the arrow button beside **New**.
+   With a Klein profile, use **+** to attach reference images, or the pen beside
+   it to sketch a reference. Z-Image Turbo does not accept reference images.
+3. Optionally enhance a description with the magic-wand menu. **Undo** (the
+   last option) restores the prior wording when available. The **Cinematic Art**
+   enhancer uses the local LFM3 1.7B with sampling temperature `0.4`.
+4. When the final PNG appears, drag to pan, use the mouse wheel to zoom, or
    double-click to reset the view. Click the download arrow to save the PNG
    at its full resolution.
 
@@ -73,9 +84,29 @@ image, which the upscaler enlarges to fit the exact output dimensions.
 
 The prompt is saved in the browser. Reloading the page draws a new seed and
 restores the current result and reference images while the server is running.
-Hover over the prompt field to reveal **New**, which draws a new seed and clears
-the current result while keeping the prompt and references. Click Download for
-a permanent copy. The server removes temporary images when it shuts down.
+Use **New** beside the prompt field to draw a new seed and clear the current
+result while keeping the prompt and references. The gear's hover menu contains
+**Hide prompt**; hovering or clicking the status message below the input
+restores it. There is no automatic five-second hide timer.
+
+With a Klein model selected, the pen immediately to the right of **+** opens
+the built-in **4:3** sketch editor (960 × 720 pixels). It includes a brush,
+eraser, text, selection/movement, four resizable shapes (rectangle, ellipse,
+straight line, arrow), a color palette, stroke-size slider and undo/redo.
+Confirming attaches a PNG reference. This editor currently uses a fixed 4:3
+canvas, even when the output wallpaper aspect ratio differs.
+
+Click a reference thumbnail to reopen a sketch for editing or enlarge a regular
+uploaded image. Reconfirming a sketch replaces its existing reference without
+changing its order. Editable items survive F5 in the same browser tab while
+session data is available. Sketches created before this state was stored can
+only be reopened as a flattened PNG background, with new objects added on top.
+The older standalone editor at `prototypes/sketch.html` is a design prototype;
+the integrated editor lives in `web/sketch.html`, `web/sketch.css`, and
+`web/sketch.js`.
+
+Click Download for a permanent copy of a generated image. The server removes
+temporary images when it shuts down.
 
 ## Build the image engines
 
@@ -159,9 +190,11 @@ and F16C. [Prompt enhancer manifest](prompt-enhancer.json)
 ## Tests
 
 The backend and browser logic tests run without generating images on the GPU.
+The optional headless Chromium sketch tests and their isolated test-server
+instructions are described in the [21.11.26 release notes](docs/release-21.11.26.md).
 
 ```bash
-python3 -m unittest discover -s tests -p test_backend.py
+python3 -m unittest discover -s tests -p 'test_*.py'
 node --test tests/frontend.test.cjs
 ```
 

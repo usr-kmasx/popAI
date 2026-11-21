@@ -1,5 +1,9 @@
 # Melhorador de prompt — validação em 2026-11-18
 
+> **Registro histórico de 18/11/2026.** Esta validação ocorreu antes da inclusão
+> do modo Cinematic Art. Veja o adendo ao final e as
+> [notas da versão 21.11.26](release-21.11.26.md).
+
 Modelo AtomicChat/LFM3-1.7B-Uncensored-GGUF, AD-Q4_K_M, SHA-256 e tamanho
 conferidos: 1.132.208.000 bytes. Revisão e fontes fixadas em prompt-enhancer.json.
 llama-server compilado para CPU x86-64/AVX2, sem CUDA ou Vulkan; executor e
@@ -50,3 +54,27 @@ Limites técnicos: a descrição e a saída compartilham o contexto de 2048 toke
 não há meta fixa de palavras. A aplicação limita textos a 16.000 caracteres e
 pedidos a 120 segundos para não deixar a interface presa. Não foram acrescentados
 filtros de assunto ao app; não se promete ausência absoluta de recusas do modelo.
+
+## Atualização — modo Cinematic Art (21/11/2026)
+
+O melhorador agora oferece quatro modos: **Simple**, **More details**,
+**Creative** e **Cinematic Art**. Este último está definido no novo arquivo
+`prompt-enhancer-cinematic.txt`, reutiliza o modelo local LFM3 1.7B e usa
+**temperatura 0.4**, sem alterar o contexto ou a arquitetura de execução.
+
+A instrução Cinematic Art pede uma descrição única em inglês, com estética de
+ilustração anime semirrealista e direção de arte cinematográfica; preserva
+personagens, objetos, quantidades, ações, poses, enquadramento e restrições
+da cena, evitando forçar elementos góticos, escuros ou sobrenaturais onde
+não se encaixam. O texto integral fica no arquivo de prompt correspondente.
+
+Na interface, a seleção do modo aparece no menu do ícone de aprimorar prompt.
+A opção **Undo** fica no final do menu quando existe uma versão anterior do
+texto para restaurar. Desfazer não inicia novo aprimoramento nem altera
+a configuração de temperatura.
+
+Os testes `tests/test_prompt_enhancer.py` cobrem a presença e a seleção do
+novo modo (4 casos). A suíte Python atual do projeto inclui 27 testes e
+a suíte de interface 13. Essas verificações de software não são uma avaliação
+empírica de qualidade artística ou de fidelidade do LFM3 em todos os prompts.
+Veja as [notas da versão 21.11.26](release-21.11.26.md).
