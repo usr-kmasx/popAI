@@ -1085,10 +1085,10 @@ prompt.addEventListener('keydown',event => {
 window.addEventListener('resize',resizePrompt);
 const composer = document.querySelector('.composer');
 const composerFields = document.querySelector('#composer-fields');
-const composerStatus = document.querySelector('.composer-status');
+const composerMessage = document.querySelector('.composer-message');
 const expandComposer = document.querySelector('#expand-composer');
 let composerIdleTimer;
-let composerStatusHovered = false;
+let composerMessageHovered = false;
 
 function setComposerCollapsed(collapsed) {
   composer.classList.toggle('is-collapsed', collapsed);
@@ -1098,7 +1098,7 @@ function setComposerCollapsed(collapsed) {
 
 function scheduleComposerCollapse() {
   window.clearTimeout(composerIdleTimer);
-  if (composerFields.inert || composerStatusHovered || composer.contains(document.activeElement)) return;
+  if (composerFields.inert || composerMessageHovered || composer.contains(document.activeElement)) return;
   composerIdleTimer = window.setTimeout(() => {
     if (!composer.contains(document.activeElement)) setComposerCollapsed(true);
   }, 5000);
@@ -1107,15 +1107,15 @@ function scheduleComposerCollapse() {
 composer.addEventListener('pointerdown', scheduleComposerCollapse);
 composer.addEventListener('focusin', scheduleComposerCollapse);
 composer.addEventListener('focusout', () => queueMicrotask(scheduleComposerCollapse));
-composerStatus.addEventListener('pointerenter', event => {
+composerMessage.addEventListener('pointerenter', event => {
   if (event.pointerType === 'touch') return;
-  composerStatusHovered = true;
+  composerMessageHovered = true;
   if (composerFields.inert) setComposerCollapsed(false);
   scheduleComposerCollapse();
 });
-composerStatus.addEventListener('pointerleave', event => {
+composerMessage.addEventListener('pointerleave', event => {
   if (event.pointerType === 'touch') return;
-  composerStatusHovered = false;
+  composerMessageHovered = false;
   scheduleComposerCollapse();
 });
 expandComposer.addEventListener('click', () => {
