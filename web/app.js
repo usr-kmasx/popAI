@@ -40,6 +40,7 @@ function wakeMascot() { lastActivity = performance.now(); updateMascot(); prepar
 document.addEventListener('pointerdown',wakeMascot,{passive:true});
 document.addEventListener('keydown',wakeMascot);
 const form = document.querySelector('#form');
+const generateImage = document.querySelector('#generate-image');
 const newGeneration = document.querySelector('#new-generation');
 function randomSeed() {
   return crypto.getRandomValues(new Uint32Array(1))[0] & 0x7fffffff;
@@ -358,6 +359,7 @@ function setBusy(value = running) {
   running = value;
   busy = value || uploading || configuring || enhancing;
   newGeneration.disabled = busy || stopping;
+  generateImage.disabled = newGeneration.disabled || !prompt.value.trim();
   refreshModels.disabled = busy;
   Object.values(sdInputs).forEach(input => { input.disabled = busy; });
   adjustConfig.disabled = busy;
