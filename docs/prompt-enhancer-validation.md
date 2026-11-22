@@ -2,7 +2,8 @@
 
 > **Registro histórico de 18/11/2026.** Esta validação ocorreu antes da inclusão
 > do modo Cinematic Art. Veja o adendo ao final e as
-> [notas da versão 21.11.26](release-21.11.26.md).
+> [notas da versão 21.11.26](release-21.11.26.md). Para as mudanças atuais,
+> consulte também a [versão 21-1.11.26](release-21-1.11.26.md).
 
 Modelo AtomicChat/LFM3-1.7B-Uncensored-GGUF, AD-Q4_K_M, SHA-256 e tamanho
 conferidos: 1.132.208.000 bytes. Revisão e fontes fixadas em prompt-enhancer.json.
@@ -78,3 +79,27 @@ novo modo (4 casos). A suíte Python atual do projeto inclui 27 testes e
 a suíte de interface 13. Essas verificações de software não são uma avaliação
 empírica de qualidade artística ou de fidelidade do LFM3 em todos os prompts.
 Veja as [notas da versão 21.11.26](release-21.11.26.md).
+
+## Atualização — Cinematic Art em 21-1.11.26 (21/11/2026)
+
+Este adendo substitui **somente a descrição do comportamento atual** do modo
+Cinematic Art, sem reescrever os registros de testes históricos acima.
+O prompt interno agora está no texto atualizado de
+`prompt-enhancer-cinematic.txt`: reforça a preservação literal dos
+elementos informados, proíbe personagens ou letreiros adicionais e pede
+decisões específicas de ponto focal, ângulo, iluminação, paleta e profundidade.
+Para pedidos de edição, exige alteração restrita ao elemento solicitado.
+
+A temperatura exclusiva do modo Cinematic Art foi reduzida de **0.4 para 0.3**
+em `prompt_enhancer.py`; os outros modos e o contexto de 2048 tokens
+permanecem inalterados. Cada pedido ao `/v1/chat/completions` usa uma
+lista nova com uma mensagem `system` e uma `user`. O uso de
+`cache_prompt=True` economiza processamento de prefixos, mas não mantém
+histórico de conversa. Desfazer e aprimorar de novo o mesmo texto cria
+outra requisição independente.
+
+Validação nesta versão: 27 testes Python e 13 testes Node aprovados,
+incluindo verificação da temperatura 0.3 e da instrução de manter o
+restante da imagem inalterado durante edições. Não foram feitos testes
+comparativos de fidelidade visual com geração de imagem.
+Veja as [notas da versão 21-1.11.26](release-21-1.11.26.md).

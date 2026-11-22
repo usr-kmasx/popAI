@@ -185,8 +185,6 @@ const referenceDialog = document.querySelector('#reference-dialog');
 const referenceLarge = document.querySelector('#reference-large');
 const referenceClose = document.querySelector('#reference-close');
 const modelButton = document.querySelector('#model-button');
-const modelControl = document.querySelector('#model-control');
-const modelOptions = document.querySelector('#model-options');
 const hideComposer = document.querySelector('#hide-composer');
 const modelDialog = document.querySelector('#model-dialog');
 const modelProfile = document.querySelector('#model-profile');
@@ -859,34 +857,8 @@ async function openConfig(tab = 'general') {
   } catch (error) { modelStatus.textContent = error.message; }
   finally { configuring = false; setBusy(); }
 }
-function setModelOptions(open) {
-  const visible = open && !modelButton.disabled;
-  modelOptions.hidden = !visible;
-  modelButton.setAttribute('aria-expanded', String(visible));
-}
-modelControl.addEventListener('pointerenter', event => {
-  if (event.pointerType !== 'touch') setModelOptions(true);
-});
-modelControl.addEventListener('pointerleave', () => {
-  if (!modelOptions.contains(document.activeElement)) setModelOptions(false);
-});
-modelControl.addEventListener('focusout', event => {
-  if (!modelControl.contains(event.relatedTarget)) setModelOptions(false);
-});
-modelControl.addEventListener('keydown', event => {
-  if (event.key !== 'Escape' || modelOptions.hidden) return;
-  event.preventDefault();
-  setModelOptions(false);
-  modelButton.focus();
-});
-document.addEventListener('pointerdown', event => {
-  if (!modelOptions.hidden && !modelControl.contains(event.target)) setModelOptions(false);
-});
-modelButton.addEventListener('click', () => { setModelOptions(false); openConfig(); });
-hideComposer.addEventListener('click', () => {
-  setModelOptions(false);
-  setComposerCollapsed(true);
-});
+modelButton.addEventListener('click', () => openConfig());
+hideComposer.addEventListener('click', () => setComposerCollapsed(true));
 const adjustConfig = document.querySelector('#adjust-config');
 adjustConfig.addEventListener('click', () => openConfig('sd'));
 

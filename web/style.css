@@ -33,13 +33,13 @@ h1{font-size:clamp(21px,2.6vw,36px);font-weight:450;letter-spacing:-1.1px;margin
 .composer.is-collapsed .new-generation-slot{visibility:hidden}
 .composer-footer{position:relative;display:flow-root}
 .new-generation-slot{position:absolute;top:0;right:0;display:flex;gap:4px;padding-top:8px;pointer-events:auto}
-.composer-status{max-width:calc(100% - 180px)}
+.composer-status{max-width:calc(100% - 244px)}
 .new-generation-slot button{height:28px;border:1px solid #ffffff20;border-radius:14px;background:var(--composer-surface);color:#e5eae2;cursor:pointer}
 .new-generation-slot button:enabled:hover{background:#333a36}
 .new-generation-slot button:focus-visible{outline:2px solid #c5d8bd;outline-offset:2px}
 #generate-image{display:grid;place-items:center;width:28px;padding:0}
 #generate-image:disabled{opacity:.45;cursor:default}
-#new-generation{min-width:52px;padding:0 12px;font:inherit;font-size:11px}
+#new-generation,#hide-composer{min-width:52px;padding:0 12px;font:inherit;font-size:11px}
 #new-generation:disabled{opacity:.45;cursor:default}
 form{position:relative;display:flex;align-items:center;width:100%}
 input{width:100%;height:60px;padding:0 54px 0 58px;border:1px solid #ffffff20;border-radius:20px;background:#151a17c9;color:#f6f5ef;font:inherit;font-size:14px;box-shadow:0 8px 32px #0003;outline:none;transition:border-color .2s,background .2s}input::placeholder{color:#a2aaa2}input:focus{border-color:#c5d8bd80;background:#181e1bdc}input:disabled{opacity:.75;cursor:wait}
@@ -70,10 +70,10 @@ input{width:100%;height:60px;padding:0 54px 0 58px;border:1px solid #ffffff20;bo
 .composer-message{position:relative;min-width:0}
 @keyframes spin{to{transform:rotate(360deg)}}
 #enhance-control{position:absolute;z-index:2;right:52px;bottom:13px}
-#enhance-options,#model-options{position:absolute;right:0;bottom:100%;width:max-content;display:grid;gap:2px;padding:5px;border:1px solid #ffffff25;border-radius:12px;background:#222824;box-shadow:0 8px 24px #0005}
-#enhance-options,#model-options{right:50%;transform:translateX(50%)}
-#enhance-options button,#model-options button{min-height:32px;padding:5px 12px;border:0;border-radius:7px;background:transparent;color:#e5eae2;text-align:left;font:inherit;font-size:13px;cursor:pointer}
-#enhance-options button:hover:enabled,#enhance-options button:focus-visible:enabled,#model-options button:hover,#model-options button:focus-visible{background:#39443b;color:#fff;outline:none}
+#enhance-options{position:absolute;right:0;bottom:100%;width:max-content;display:grid;gap:2px;padding:5px;border:1px solid #ffffff25;border-radius:12px;background:#222824;box-shadow:0 8px 24px #0005}
+#enhance-options{right:50%;transform:translateX(50%)}
+#enhance-options button{min-height:32px;padding:5px 12px;border:0;border-radius:7px;background:transparent;color:#e5eae2;text-align:left;font:inherit;font-size:13px;cursor:pointer}
+#enhance-options button:hover:enabled,#enhance-options button:focus-visible:enabled{background:#39443b;color:#fff;outline:none}
 #enhance-options button:disabled{opacity:.4;cursor:default}
 #enhance-prompt{width:34px;height:34px;display:grid;place-items:center;border:0;border-radius:11px;background:transparent;color:#c5cec5;cursor:pointer}#enhance-prompt:hover{background:#ffffff12;color:white}#enhance-prompt:disabled{opacity:.35;cursor:default}#enhance-prompt:focus-visible{outline:2px solid #c5d8bd;outline-offset:2px}#enhance-prompt .enhance-star{transform-origin:18px 6px}#enhance-prompt.enhancing .enhance-star{animation:enhance-pulse .75s ease-in-out infinite alternate}#cancel-enhance{border:1px solid #ffffff30;border-radius:8px;padding:5px 10px;background:#262e28;color:#f3f1ed;font:inherit;font-size:11px;cursor:pointer;flex-shrink:0}@keyframes enhance-pulse{to{opacity:.3;transform:scale(.82)}}@media(max-width:640px){#enhance-control{bottom:11px}}@media(prefers-reduced-motion:reduce){#enhance-prompt.enhancing .enhance-star{animation:none}}
 @media(max-width:640px){.topline{inset:22px 22px auto}.composer{width:calc(100% - 32px);bottom:16px}input{height:56px;border-radius:18px;font-size:16px}.welcome{padding-bottom:90px}h1{letter-spacing:-.6px}}

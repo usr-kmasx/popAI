@@ -100,7 +100,7 @@ test('Generate and New controls stay visible without input hover',async()=>{
  assert.match(css,/\.new-generation-slot\{[^}]*pointer-events:auto/);
  assert.doesNotMatch(css,/\.composer:has\(form:hover\) \.new-generation-slot/);
  assert.doesNotMatch(css,/\.new-generation-slot:has\(#new-generation:disabled\)/);
- assert.match(css,/\.composer-status\{max-width:calc\(100% - 180px\)/);
+ assert.match(css,/\.composer-status\{max-width:calc\(100% - 244px\)/);
  const h=harness({state:'idle'});await tick();
  assert.equal(h.query('#new-generation').disabled,false);
  assert.equal(h.query('#generate-image').disabled,true);
@@ -109,22 +109,20 @@ test('Generate and New controls stay visible without input hover',async()=>{
  assert.equal(h.query('#generate-image').disabled,false);
  assert.equal(h.query('#new-generation').disabled,false);
 });
-test('prompt hides only by the gear hover action and reopens from the status area',async()=>{
+test('Hide sits beside Generate and New, gear has no hover menu, and status reopens prompt',async()=>{
  const html=fs.readFileSync('web/index.html','utf8');
  const app=fs.readFileSync('web/app.js','utf8');
  assert.doesNotMatch(app,/scheduleComposerCollapse|composerIdleTimer/);
- assert.match(html,/id="model-options"/);
- assert.match(html,/id="hide-composer"/);
+ assert.doesNotMatch(html,/id="model-options"/);
+ assert.match(html,/<div class="new-generation-slot">[\s\S]*?id="generate-image"[\s\S]*?id="new-generation"[\s\S]*?id="hide-composer"/);
  assert.doesNotMatch(html,/id="expand-composer"/);
  const h=harness({state:'idle'});await tick();
  const fields=h.query('#composer-fields');
- const options=h.query('#model-options');
  assert.notEqual(fields.inert,true);
- h.query('#model-control').events.pointerenter({pointerType:'mouse'});
- assert.equal(options.hidden,false);
+ assert.equal(h.query('#model-control').events.pointerenter,undefined);
+ assert.equal(typeof h.query('#model-button').events.click,'function');
  h.query('#hide-composer').events.click();
  assert.equal(fields.inert,true);
- assert.equal(options.hidden,true);
  h.query('.composer-message').events.pointerenter({pointerType:'mouse'});
  assert.equal(fields.inert,false);
  h.query('.composer-message').events.pointerleave?.({pointerType:'mouse'});

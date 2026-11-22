@@ -65,7 +65,7 @@ class PromptEnhancerModeTests(unittest.TestCase):
         self.assertIn('A white-haired girl looking at the sky', body['messages'][1]['content'])
         self.assertEqual(body['messages'][1]['content'],
                          'Rewrite this image description as an English prompt:\n\nA white-haired girl looking at the sky')
-        self.assertEqual(body['temperature'], ENHANCER_MODES['cinematic'][1])
+        self.assertEqual(body['temperature'], 0.3)
 
     def test_reference_edit_preserves_edit_scope(self):
         self.run_prompt('Change only the background to blue', editing=True)
@@ -73,7 +73,7 @@ class PromptEnhancerModeTests(unittest.TestCase):
         self.assertIn('Rewrite this image edit', message)
         self.assertEqual(message,
                          'Rewrite this image edit as an English instruction:\n\nChange only the background to blue')
-        self.assertIn('preserve everything else', self.enhancer.systems['cinematic'])
+        self.assertIn('everything else stays unchanged', self.enhancer.systems['cinematic'])
 
     def test_unknown_mode_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'Cinematic Art'):

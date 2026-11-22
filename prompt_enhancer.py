@@ -22,7 +22,7 @@ ENHANCER_MODES = {
                  'Add new, concrete visual details the original does not specify. Develop the main subject and any other important elements with room for detail.'),
     'creative': ('prompt-enhancer-creative.txt', .55,
                  'Give the stated scene four new visual details that fit together.'),
-    'cinematic': ('prompt-enhancer-cinematic.txt', .4, ''),
+    'cinematic': ('prompt-enhancer-cinematic.txt', .3, ''),
 }
 
 
