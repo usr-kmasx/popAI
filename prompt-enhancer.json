@@ -4,24 +4,27 @@
     "revision": "2d8a32502909ca065c41c4cf5f2fb1c427c047fc",
     "url": "https://codeload.github.com/ggml-org/llama.cpp/tar.gz/2d8a32502909ca065c41c4cf5f2fb1c427c047fc",
     "sha256": "7befec5f2a7fbd7fc69b69e4f80c9824a64cb760cd1b18aa0e1a6b1af53de7d8",
-    "directory": "backends/llama-cpu",
-    "cpu_only": true
+    "directory": "backends/llama-vulkan",
+    "cpu_only": false,
+    "gpu_backend": "vulkan"
   },
   "model": {
-    "repository": "https://huggingface.co/AtomicChat/LFM3-1.7B-Uncensored-GGUF",
-    "revision": "3ad712542eb9de349dbd28f2739b69c925cdec7d",
-    "filename": "LFM3-1.7B-Uncensored-AD-Q4_K_M.gguf",
+    "repository": "https://huggingface.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive",
+    "revision": "c09cdbcdb1fefad6d335809d445621b5f5ba0c6e",
+    "filename": "Qwen3.5-4B-Uncensored-HauhauCS-Aggressive-Q8_0.gguf",
     "directory": "models/prompt-enhancer",
-    "size": 1132208000,
-    "sha256": "b22df65673b54ed326f18f74826d76f3b65dadc237ffd6306cd52be04544827d",
-    "url": "https://huggingface.co/AtomicChat/LFM3-1.7B-Uncensored-GGUF/resolve/3ad712542eb9de349dbd28f2739b69c925cdec7d/LFM3-1.7B-Uncensored-AD-Q4_K_M.gguf",
-    "license_url": "https://huggingface.co/AtomicChat/LFM3-1.7B-Uncensored-GGUF/resolve/3ad712542eb9de349dbd28f2739b69c925cdec7d/LICENSE"
+    "size": 4482402656,
+    "sha256": "3aa21dfc185595bb9f3f8f98f08325fcecfdf446c510ce2b03fe19104e700c16",
+    "url": "https://huggingface.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive/resolve/c09cdbcdb1fefad6d335809d445621b5f5ba0c6e/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive-Q8_0.gguf",
+    "license_url": "https://huggingface.co/Qwen/Qwen3.5-4B/resolve/main/LICENSE",
+    "license_filename": "LICENSE"
   },
   "runtime": {
-    "gpu_layers": 0,
-    "context": 2048,
+    "gpu_layers": 999,
+    "context": 4096,
     "reasoning": "off",
     "port": 8081,
-    "threads": 4
+    "threads": 4,
+    "load_policy": "per_request"
   }
 }

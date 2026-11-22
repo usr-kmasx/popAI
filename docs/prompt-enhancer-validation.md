@@ -3,7 +3,8 @@
 > **Registro histórico de 18/11/2026.** Esta validação ocorreu antes da inclusão
 > do modo Cinematic Art. Veja o adendo ao final e as
 > [notas da versão 21.11.26](release-21.11.26.md). Para as mudanças atuais,
-> consulte também a [versão 21-1.11.26](release-21-1.11.26.md).
+> consulte também a [versão 21-1.11.26](release-21-1.11.26.md). Para o funcionamento atual,
+> consulte [22.11.26](release-22.11.26.md).
 
 Modelo AtomicChat/LFM3-1.7B-Uncensored-GGUF, AD-Q4_K_M, SHA-256 e tamanho
 conferidos: 1.132.208.000 bytes. Revisão e fontes fixadas em prompt-enhancer.json.
@@ -103,3 +104,19 @@ incluindo verificação da temperatura 0.3 e da instrução de manter o
 restante da imagem inalterado durante edições. Não foram feitos testes
 comparativos de fidelidade visual com geração de imagem.
 Veja as [notas da versão 21-1.11.26](release-21-1.11.26.md).
+
+## Atualização — Vulkan sob demanda e Qwen3.5 Q8_0 (22/11/2026)
+
+O registro acima permanece histórico e se refere ao LFM3 na CPU. Na versão
+`22.11.26`, o melhorador usa o Qwen3.5-4B Uncensored HauhauCS Aggressive
+GGUF Q8_0, com contexto 4096 e backend llama.cpp Vulkan. O servidor não é
+pré-carregado; inicia com cada ação Enhance e termina ao concluir, cancelar
+ou desconectar, liberando a VRAM. O modo Cinematic Art usa a versão detalhada
+do prompt interno, com 12 tópicos e prioridade de fidelidade à descrição.
+
+Foram executados testes de integração de prompt por GPU, descarregamento após
+a conclusão e cancelamento. Em um teste local, Cinematic Art levou cerca de
+12,05 s na RX 580 e a VRAM total observada caiu de 6,84 GB durante o processo
+para 2,05 GB após ele terminar. A suíte registrou 31 testes Python e 13 Node
+aprovados. Consulte as [notas da versão 22.11.26](release-22.11.26.md) para
+a configuração, limitações e manifesto da versão.

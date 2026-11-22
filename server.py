@@ -1118,7 +1118,7 @@ def main():
         except (ValueError, OSError) as exc:
             manager.config_error = f'Check the saved settings. Details: {exc}'
     server = create_server(manager, args.port)
-    manager.enhancer.start()
+    # Enhance loads its Vulkan model only when requested; never preload at startup.
     def stop_server(signum, frame):
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, stop_server)

@@ -75,6 +75,96 @@ class PromptEnhancerModeTests(unittest.TestCase):
                          'Rewrite this image edit as an English instruction:\n\nChange only the background to blue')
         self.assertIn('everything else stays unchanged', self.enhancer.systems['cinematic'])
 
+    def test_on_demand_load_and_unload(self):
+        class OwnedProcess:
+            def poll(self):
+                return None
+
+        process = OwnedProcess()
+        def launch():
+            self.enhancer.process = process
+            self.enhancer.state = 'ready'
+
+        self.assertEqual(self.enhancer.state, 'stopped')
+        self.assertIsNone(self.enhancer.process)
+        with patch.object(self.enhancer, 'start', side_effect=launch) as start:
+            with patch('prompt_enhancer.terminate') as terminate:
+                with patch('prompt_enhancer.http.client.HTTPConnection', FakeConnection):
+                    result = list(self.enhancer.stream('A purple fox.', mode='cinematic'))
+        start.assert_called_once()
+        terminate.assert_any_call(process)
+        self.assertEqual(result[-1]['state'], 'done')
+        self.assertEqual(self.enhancer.state, 'stopped')
+        self.assertIsNone(self.enhancer.process)
+        self.assertFalse(self.enhancer.busy)
+
+    def test_disconnect_and_cancel_release_process(self):
+        class OwnedProcess:
+            def poll(self):
+                return None
+
+        for cancel in (False, True):
+            process = OwnedProcess()
+            def launch():
+                self.enhancer.process = process
+                self.enhancer.state = 'ready'
+            with patch.object(self.enhancer, 'start', side_effect=launch):
+                with patch('prompt_enhancer.terminate') as terminate:
+                    with patch('prompt_enhancer.http.client.HTTPConnection', FakeConnection):
+                        iterator = self.enhancer.stream('Blue cat.', mode='cinematic')
+                        self.assertEqual(next(iterator), {'state': 'started'})
+                        self.assertIn('text', next(iterator))
+                        if cancel:
+                            self.enhancer.cancel_current()
+                        iterator.close()
+            terminate.assert_any_call(process)
+            self.assertIsNone(self.enhancer.process)
+            self.assertEqual(self.enhancer.state, 'stopped')
+            self.assertFalse(self.enhancer.busy)
+
+    def test_cancel_while_loading_stops_owned_process(self):
+        from threading import Event, Thread
+
+        class OwnedProcess:
+            def poll(self):
+                return None
+
+        process = OwnedProcess()
+        loading = Event()
+        result = []
+        def launch():
+            self.enhancer.process = process
+            self.enhancer.state = 'loading'
+            loading.set()
+        def run():
+            try:
+                result.extend(self.enhancer.stream('A blue cat.', mode='cinematic'))
+            except RuntimeError as exc:
+                result.append(str(exc))
+
+        with patch.object(self.enhancer, 'start', side_effect=launch):
+            with patch('prompt_enhancer.terminate') as terminate:
+                thread = Thread(target=run)
+                thread.start()
+                self.assertTrue(loading.wait(2))
+                self.enhancer.cancel_current()
+                thread.join(timeout=5)
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(any('canceled' in str(item) for item in result))
+        terminate.assert_any_call(process)
+        self.assertEqual(self.enhancer.state, 'stopped')
+        self.assertIsNone(self.enhancer.process)
+        self.assertFalse(self.enhancer.busy)
+
+    def test_vulkan_backend_configured(self):
+        root = Path(__file__).resolve().parents[1]
+        settings = json.loads((root / 'prompt-enhancer.json').read_text())
+        self.assertEqual(settings['backend']['gpu_backend'], 'vulkan')
+        self.assertEqual(settings['runtime']['load_policy'], 'per_request')
+        self.assertEqual(settings['runtime']['gpu_layers'], 999)
+        self.assertEqual(self.enhancer.binary.name, 'llama-server')
+        self.assertEqual(self.enhancer.binary.parent.name, 'llama-vulkan')
+
     def test_unknown_mode_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'Cinematic Art'):
             list(self.enhancer.stream('image', mode='unknown'))

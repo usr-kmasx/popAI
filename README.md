@@ -1,6 +1,6 @@
 # popAI
 
-**Current release: 21-1.11.26** · [Release notes](docs/release-21-1.11.26.md) · [Previous release](docs/release-21.11.26.md)
+**Current release: 22.11.26** · [Release notes](docs/release-22.11.26.md) · [Previous release](docs/release-21-1.11.26.md)
 
 Generate, edit, and upscale wallpapers locally on Linux. popAI runs image models
 on Vulkan and exports PNGs up to 4K UHD at 16:9. It serves its interface in your
@@ -17,8 +17,9 @@ browser and runs inference on your computer.
 - Live progress and previews. The total includes preparation, generation,
   upscaling, and PNG finalization. The clock shows an estimate for the current
   stage when progress data is available.
-- Optional CPU-only prompt enhancement with **Simple**, **More details**,
-  **Creative**, and **Cinematic Art** modes, plus undo and cancellation.
+- On-demand Vulkan prompt enhancement with **Simple**, **More details**,
+  **Creative**, and **Cinematic Art** modes, plus undo and cancellation. The
+  model is unloaded from GPU memory after each enhancement.
 - Built-in 4:3 sketch editor for Klein reference images: freehand strokes, text,
   rectangles, ellipses, straight lines, and arrows; selection, resizing,
   undo/redo, and re-editing from the reference thumbnail.
@@ -36,7 +37,7 @@ direct PNG writer also uses libpng development headers.
 Clone the release and open the project folder.
 
 ```bash
-git clone --branch 21-1.11.26 https://github.com/usr-kmasx/popAI.git
+git clone --branch 22.11.26 https://github.com/usr-kmasx/popAI.git
 cd popAI
 ```
 
@@ -67,9 +68,9 @@ FLUX 3 Image Klein. To add a model directory at launch, pass
    it to sketch a reference. Z-Image Turbo does not accept reference images.
 3. Optionally enhance a description with the magic-wand menu. **Undo** (the
    last option) restores the prior wording when available. The **Cinematic Art**
-   enhancer uses the local LFM3 1.7B with sampling temperature `0.3` and a revised
-   scene-fidelity prompt. Each enhancement sends a separate request without
-   conversation history; improving, undoing, and improving again reuses the
+   enhancer uses the local Qwen3.5-4B HauhauCS Aggressive Q8_0 with sampling
+   temperature `0.3` and a scene-fidelity prompt. Each enhancement sends a
+   separate request without conversation history; improving, undoing, and improving again reuses the
    original text, not a previous conversation.
 4. When the final PNG appears, drag to pan, use the mouse wheel to zoom, or
    double-click to reset the view. Click the download arrow to save the PNG
@@ -189,17 +190,23 @@ running `./start.sh` in a new terminal.
 ## Optional prompt enhancer
 
 Run `python3 tools/setup-prompt-enhancer.py` after preparing the local build
-tools. It downloads the pinned LFM3 1.7B GGUF model (about 1.13 GB) and builds
-the CPU-only llama.cpp server in the project. This build requires AVX2, FMA,
-and F16C. [Prompt enhancer manifest](prompt-enhancer.json)
+tools. It downloads the pinned Qwen3.5-4B HauhauCS Aggressive GGUF Q8_0 model
+(about 4.48 GB) and builds a dedicated Vulkan llama.cpp server inside the project.
+The enhancer does **not** preload at application startup: it starts on the
+each **Enhance** request and its process exits after completion, cancellation,
+connection loss or failure to free its VRAM. Vulkan-capable hardware, `glslc`,
+and the local Vulkan/SPIR-V headers under `tools/local` are required. This
+configuration intentionally does not fall back silently to CPU. The previous
+LFM3 and Huihui Q4 model weights are not included or required.
+[Prompt enhancer manifest](prompt-enhancer.json)
 
 ## Tests
 
 The backend and browser logic tests run without generating images on the GPU.
 The optional headless Chromium sketch tests and their isolated test-server
 instructions are described in the [21.11.26 release notes](docs/release-21.11.26.md),
-with the current UI and enhancer updates in the
-[21-1.11.26 release notes](docs/release-21-1.11.26.md).
+with the current Vulkan enhancer and Qwen Q8_0 updates in the
+[22.11.26 release notes](docs/release-22.11.26.md).
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py'

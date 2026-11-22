@@ -1,4 +1,4 @@
-"""Owned CPU-only llama-server, preloaded once and streamed through the app."""
+"""Owned Vulkan llama-server, loaded per enhancement and released afterward."""
 import json
 import http.client
 import os
@@ -15,7 +15,7 @@ from processes import spawn
 from resident import terminate
 
 MAX_PROMPT_CHARS = 16000
-CONTEXT_SIZE = 2048
+CONTEXT_SIZE = 4096
 ENHANCER_MODES = {
     'simple': ('prompt-enhancer-system.txt', .4, ''),
     'detailed': ('prompt-enhancer-detailed.txt', .2,
@@ -31,8 +31,8 @@ class PromptEnhancer:
         self.root=Path(root)
         self.logs=Path(logs)
         self.port=port
-        self.binary=self.root/'backends/llama-cpu/llama-server'
-        self.model=self.root/'models/prompt-enhancer/LFM3-1.7B-Uncensored-AD-Q4_K_M.gguf'
+        self.binary=self.root/'backends/llama-vulkan/llama-server'
+        self.model=self.root/'models/prompt-enhancer/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive-Q8_0.gguf'
         self.systems = {
             mode: (RESOURCE_ROOT / filename).read_text(encoding='utf-8')
             for mode, (filename, _, _) in ENHANCER_MODES.items()
@@ -69,8 +69,8 @@ class PromptEnhancer:
 
     def _load(self):
         try:
-            # Only retire our previous failed child; never adopt a foreign port.
-            terminate(self.process)
+            # A new isolated GPU process is started only for this enhancement.
+            if self.stop_event.is_set() or self.request_cancel.is_set():return
             with self.lock:self.process=None
             if not self.binary.is_file() or not self.model.is_file():
                 raise RuntimeError('The prompt enhancer is missing. Run tools/setup-prompt-enhancer.py from the project folder.')
@@ -79,7 +79,7 @@ class PromptEnhancer:
                 listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
                 try:listener.bind(('127.0.0.1',self.port))
                 except OSError as exc:raise RuntimeError(f'Prompt enhancer port {self.port} is already in use.') from exc
-            command=[str(self.binary),'-m',str(self.model),'-ngl','0','--device','none',
+            command=[str(self.binary),'-m',str(self.model),'-ngl','999','--device','Vulkan0',
                      '-c',str(CONTEXT_SIZE),'--parallel','1','--reasoning','off','--no-context-shift',
                      '--host','127.0.0.1','--port',str(self.port),'--threads',str(min(4,os.cpu_count() or 1))]
             self.logs.mkdir(parents=True,exist_ok=True)
@@ -88,12 +88,13 @@ class PromptEnhancer:
             for key in list(env):
                 if key.startswith(('LLAMA_ARG_','LLAMA_OFFLINE','LLAMA_MODEL_')):env.pop(key,None)
             with self.lock:
-                if self.stop_event.is_set():return
+                if self.stop_event.is_set() or self.request_cancel.is_set():return
                 with (self.logs/'prompt-enhancer.log').open('a',encoding='utf-8') as output:
                     self.process=spawn(command,cwd=self.root,env=env,stdout=output,stderr=subprocess.STDOUT)
                 process=self.process
             deadline=time.monotonic()+120
             while not self.stop_event.wait(.2):
+                if self.request_cancel.is_set():return
                 if process.poll() is not None:raise RuntimeError('The prompt enhancer failed to load. See logs/prompt-enhancer.log.')
                 if time.monotonic()>deadline:raise RuntimeError('The prompt enhancer took too long to load.')
                 try:
@@ -103,12 +104,28 @@ class PromptEnhancer:
                         req=Request(self.url+'/v1/models',headers={'Authorization':'Bearer '+self.token})
                         with self.http.open(req,timeout=1) as response:json.load(response)
                         with self.lock:
-                            if not self.stop_event.is_set():self.state='ready'
+                            if not self.stop_event.is_set() and not self.request_cancel.is_set():self.state='ready'
                         return
                 except (OSError,ValueError):pass
         except Exception as exc:
-            with self.lock:self.state='error';self.error=str(exc)
-            terminate(self.process)
+            with self.lock:
+                if not self.stop_event.is_set() and not self.request_cancel.is_set():
+                    self.state='error';self.error=str(exc)
+                process=self.process
+                self.process=None
+            terminate(process)
+
+    def _release(self):
+        # Setting cancellation under the same lock as spawning prevents late GPU loads.
+        with self.lock:
+            self.request_cancel.set()
+            process=self.process
+            self.process=None
+            self.state='stopped'
+            self.error=None
+        if process is not None:terminate(process)
+        worker=self.worker
+        if worker and worker is not threading.current_thread():worker.join(timeout=5)
 
     def stream(self,prompt,editing=False,*,mode='simple'):
         if not isinstance(prompt,str) or not prompt.strip() or len(prompt)>MAX_PROMPT_CHARS or '\0' in prompt:
@@ -180,15 +197,23 @@ class PromptEnhancer:
                             written+=len(token)
                             if written>MAX_PROMPT_CHARS:raise RuntimeError('The enhanced prompt exceeded the character limit. Try a shorter description.')
                             yield {'text':token}
+            except OSError as exc:
+                if self.request_cancel.is_set():raise RuntimeError('Prompt enhancement canceled.') from exc
+                raise
             finally:
                 connection.close()
                 with self.lock:self.native_socket=None
+            if self.request_cancel.is_set():raise RuntimeError('Prompt enhancement canceled.')
             if not complete or not written:raise RuntimeError('The prompt enhancer did not finish. Try again.')
             if finish=='length':raise RuntimeError(f'The prompt enhancer reached its {CONTEXT_SIZE}-token context limit. Try a shorter description.')
+            # Free VRAM before the browser sees a completed enhancement.
+            self._release()
             yield {'state':'done','seconds':round(time.monotonic()-started,2)}
         finally:
-            with self.lock:self.busy=False
-            self.request_lock.release()
+            try:self._release()
+            finally:
+                with self.lock:self.busy=False
+                self.request_lock.release()
 
     def cancel_current(self):
         with self.lock:
@@ -202,7 +227,4 @@ class PromptEnhancer:
     def close(self):
         self.stop_event.set()
         self.cancel_current()
-        with self.lock:process=self.process
-        terminate(process)
-        if self.worker and self.worker is not threading.current_thread():self.worker.join(timeout=5)
-        with self.lock:self.state='stopped'
+        self._release()

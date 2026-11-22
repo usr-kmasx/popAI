@@ -401,7 +401,7 @@ function setBusy(value = running) {
   enhanceOptions.querySelectorAll('button[data-mode]').forEach(option => { option.disabled = !canImprove; });
   enhancePrompt.disabled = !canImprove && !canUndo;
   if (enhancePrompt.disabled) setEnhanceOptions(false);
-  enhancePrompt.title = !canImprove && canUndo ? 'Undo prompt enhancement' : enhancing ? 'Enhancing prompt…' : enhancerState.state === 'ready' ? 'Enhance prompt' : enhancerState.state==='error' || enhancerState.state==='stopped' ? 'Retry prompt enhancement' : 'Loading prompt enhancer…';
+  enhancePrompt.title = !canImprove && canUndo ? 'Undo prompt enhancement' : enhancing ? 'Enhancing prompt…' : enhancerState.state === 'ready' || enhancerState.state === 'stopped' ? 'Enhance prompt' : enhancerState.state==='error' ? 'Retry prompt enhancement' : 'Loading prompt enhancer…';
   enhancePrompt.classList.toggle('enhancing',enhancing);
   enhancePrompt.setAttribute('aria-busy',String(enhancing));
   cancelEnhance.hidden = !enhancing;

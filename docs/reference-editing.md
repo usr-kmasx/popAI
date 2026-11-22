@@ -4,7 +4,7 @@
 > implementação com uma única referência. Para o comportamento atual, incluindo
 > múltiplas referências, preview ampliado e editor de desenho, consulte o
 > [lançamento 21.11.26](release-21.11.26.md) e o adendo ao final deste arquivo.
-> Para a versão atual do aplicativo, veja [21-1.11.26](release-21-1.11.26.md).
+> Para a versão atual do aplicativo, veja [22.11.26](release-22.11.26.md).
 
 Pedido aprovado: adicionar botão + ao campo para anexar uma imagem e editar com
 uma instrução textual. Manter FLUX.2 Klein 4B Q8, pipeline de ampliação e saída
