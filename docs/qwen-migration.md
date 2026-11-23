@@ -1,7 +1,9 @@
 # Troca para Qwen Image 2.1 — 2026-11-17
 
-Histórico da troca para Qwen normal. O modelo ativo passou a ser Turbo conforme
-`qwen-turbo.md`; os parâmetros abaixo documentam a etapa anterior.
+Histórico da troca para Qwen normal. Uma variante Turbo antiga foi testada
+conforme `qwen-turbo.md`; os parâmetros abaixo documentam essa etapa anterior.
+A integração oficial atual do Qwen usa a variante ChatR Labs Turbo, descrita em
+[22-1.11.26](release-22-1.11.26.md).
 
 Pedido: substituir o conjunto completo do DreamShaper pelo Qwen existente no SSD,
 mantendo a interface. O usuário fará a geração; não carregar modelos reais para
@@ -9,7 +11,8 @@ testes, não deixar servidor em execução e não instalar nada no sistema.
 
 ## Identificação e carregamento
 
-Pasta: `/run/media/usr/dados/Models/IMG/Qwen-Image-2.1-Turbo-Quantized`.
+Arquivos importados de um diretório de modelos existente, sem cópia.
+A pasta pode ser escolhida em **Settings → Models**.
 O nome da pasta não define a variante. O SHA-256 do gerador é:
 
 ```text

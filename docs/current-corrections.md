@@ -1,8 +1,8 @@
 # Correções locais — 2026-11-17
 
 > **Histórico.** Os modelos e comandos deste registro refletem 17/11/2026.
-> O conjunto atual e a versão 22.11.26 estão descritos no
-> [README](../README.md) e nas [notas do lançamento](release-22.11.26.md).
+> A versão atual está descrita no [README](../README.md) e nas
+> [notas de 22-1.11.26](release-22-1.11.26.md).
 
 Autorizado: remover DreamShaper e concluir a simplificação e correções discutidas.
 Modelos oficiais: Z-Image Turbo Q8 e Klein 4B Q8. Pesos continuam no SSD externo;

@@ -35,6 +35,32 @@ def validate_image(path, dimensions):
         raise RuntimeError(f'The backend did not produce a valid {dimensions[0]}×{dimensions[1]} PNG image.') from exc
 
 
+def prepare_qwen_reference(source, destination, *, max_edge=512):
+    """Prepare an isolated Qwen Image 2.1 input, preserving the uploaded original.
+
+    Qwen3-VL requires multiples of 32; bound the image size for low-VRAM use.
+    No crop: preserve the original aspect ratio and pad the edges with white.
+    """
+    from PIL import ImageOps
+    with Image.open(source) as original:
+        original.load()
+        image = ImageOps.exif_transpose(original).convert('RGB')
+    if max(image.size) > max_edge:
+        image.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+    width, height = image.size
+    aligned = ((width + 31) // 32 * 32, (height + 31) // 32 * 32)
+    if aligned != image.size:
+        left = (aligned[0] - width) // 2
+        top = (aligned[1] - height) // 2
+        image = ImageOps.expand(image, (left, top, aligned[0] - width - left,
+                                        aligned[1] - height - top), fill='white')
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    image.save(destination, format='PNG')
+    validate_image(destination, aligned)
+    return destination
+
+
 def crop_box(source_dimensions, dimensions, max_crop):
     width, height = dimensions
     src_width, src_height = source_dimensions

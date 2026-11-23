@@ -1,5 +1,10 @@
 # Geração e ampliação por IA em etapas
 
+> **Histórico técnico.** Esta página registra a experiência inicial com 2×.
+> Na versão [22-1.11.26](release-22-1.11.26.md), o upscaler ativo é o
+> Real-ESRGAN NCNN/Vulkan 4×. A proposta de escolha automática entre modelos
+> de ampliação foi apenas planejada e **não foi implementada**.
+
 O usuário aprovou gerar em 960×544 com o Klein, encerrar o processo e depois
 carregar um ampliador 2×. Manter um input, mostrar a etapa atual e salvar em
 1920×1080. Nenhuma instalação no sistema; geração real na GPU será testada por ele.

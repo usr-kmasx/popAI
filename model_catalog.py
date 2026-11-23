@@ -4,7 +4,7 @@ import json
 import mmap
 import struct
 from pathlib import Path
-from catalog import component_family
+from catalog import PROFILES, component_family
 
 _LIMIT = 64 * 1024**2
 _FORMATS = {0:'B',1:'b',2:'H',3:'h',4:'I',5:'i',6:'f',7:'?',10:'Q',11:'q',12:'d'}
@@ -127,6 +127,8 @@ def identify(data):
         return 'diffusion', 'flux3-klein'
     if t.get('img_in.weight') == (128,3072) and 'double_blocks.0.img_attn.qkv.weight' in t:
         return 'diffusion', 'klein'
+    if arch == 'qwen_image21' and t.get('img_in.weight') == (64,4096) and 'txt_in.text_norm.weight' in t:
+        return 'diffusion', 'qwen_image21'
     if t.get('model.diffusion_model.img_in.weight') == (64,4096) and 'model.diffusion_model.modulation.1.weight' in t:
         return 'diffusion', 'qwen'
     if t.get('x_embedder.weight') == (64,3840) and t.get('cap_embedder.1.weight') == (2560,3840):
@@ -161,16 +163,19 @@ def diffusion_profile(path, data=None):
         raise ValueError('Select a generator in the Generator field.')
     if family == 'qwen':
         return 'qwen-turbo' if 'turbo' in Path(path).name.lower() else 'qwen'
+    if family == 'qwen_image21':
+        return 'qwen-image21-experimental'
     return family if family in ('klein','z-image-turbo','flux3-klein') else 'auto'
 
 
 def validate(profile, paths):
-    family = 'qwen' if profile in ('qwen','qwen-turbo') else profile
-    expected = {'diffusion': family, 'encoder': 'qwen3vl-8b' if family == 'qwen' else 'qwen3-4b', 'vae': family, 'vision':'qwen3vl-8b'}
-    if family=='flux3-klein':
-        expected.update({role:component_family(family,role) for role in ('encoder','vae')})
+    family = PROFILES.get(profile,{}).get('family', 'qwen' if profile in ('qwen','qwen-turbo') else profile)
+    expected = ({role: component_family(profile,role) for role in ('diffusion','encoder','vae','vision')}
+                if profile in PROFILES else
+                {'diffusion':family,'encoder':'qwen3vl-8b' if family=='qwen' else 'qwen3-4b',
+                 'vae':family,'vision':'qwen3vl-8b'})
     for role, path in paths.items():
-        if path is None or (role == 'vision' and family != 'qwen'):
+        if path is None or (role == 'vision' and profile in PROFILES and not PROFILES[profile].get('components',{}).get('vision')):
             continue
         try:
             actual = identify(inspect(path))

@@ -1,6 +1,6 @@
 # popAI
 
-**Current release: 22.11.26** · [Release notes](docs/release-22.11.26.md) · [Previous release](docs/release-21-1.11.26.md)
+**Current release: 22-1.11.26** · [Release notes](docs/release-22-1.11.26.md) · [Previous release](docs/release-22.11.26.md)
 
 Generate, edit, and upscale wallpapers locally on Linux. popAI runs image models
 on Vulkan and exports PNGs up to 4K UHD at 16:9. It serves its interface in your
@@ -8,19 +8,20 @@ browser and runs inference on your computer.
 
 ## Features
 
-- Text-to-image generation with Z-Image Turbo, FLUX.2 Klein 4B, and FLUX 3
-  Image Klein. Both Klein models support editing with up to 10 reference images.
+- Text-to-image generation with Z-Image Turbo, FLUX.2 Klein 4B, FLUX 3
+  Image Klein, and Qwen Image 2.1 (ChatR Labs Turbo, Q8). Both Klein models and
+  Qwen support editing with up to 10 reference images.
 - Real-ESRGAN upscaling through NCNN and Vulkan. Choose the base generation
   size, aspect ratio, and final resolution separately.
-- Model management with folder import, resumable downloads, and SHA-256 checks
-  against the published manifest.
+- Model management with four named download folders, reuse of imported models,
+  resumable downloads, and SHA-256 checks against the published manifest.
 - Live progress and previews. The total includes preparation, generation,
   upscaling, and PNG finalization. The clock shows an estimate for the current
   stage when progress data is available.
 - On-demand Vulkan prompt enhancement with **Simple**, **More details**,
   **Creative**, and **Cinematic Art** modes, plus undo and cancellation. The
   model is unloaded from GPU memory after each enhancement.
-- Built-in 4:3 sketch editor for Klein reference images: freehand strokes, text,
+- Built-in 4:3 sketch editor for Klein and Qwen reference images: freehand strokes, text,
   rectangles, ellipses, straight lines, and arrows; selection, resizing,
   undo/redo, and re-editing from the reference thumbnail.
 - Click uploaded reference thumbnails to inspect them in a larger preview.
@@ -37,7 +38,7 @@ direct PNG writer also uses libpng development headers.
 Clone the release and open the project folder.
 
 ```bash
-git clone --branch 22.11.26 https://github.com/usr-kmasx/popAI.git
+git clone --branch 22-1.11.26 https://github.com/usr-kmasx/popAI.git
 cd popAI
 ```
 
@@ -52,19 +53,50 @@ Open [popAI on your computer](http://127.0.0.1:7860/). To use a different
 port, run `./start.sh --port 7861`. Press **Ctrl+C** in the terminal to stop
 the server and release its engines.
 
-In **Settings → Models**, choose a download folder and download one model set,
-or use **Find existing models** to import compatible files in place. Each set
-uses a generator, text encoder, and VAE. Download sizes are approximately
-**9.4 GB** for Z-Image Turbo, **7.1 GB** for FLUX.2 Klein 4B, and **9.0 GB** for
-FLUX 3 Image Klein. To add a model directory at launch, pass
-`--model-dir /path/to/models`.
+In **Settings → Models**, choose one download folder for your model collection,
+or use **Find existing models** to register compatible files without copying them.
+Each set uses a generator, text encoder, and VAE. Qwen additionally requires a
+vision projector for reference editing and the ChatR Labs Turbo LoRA. Download
+sizes are approximately **9.4 GB** for Z-Image Turbo, **7.1 GB** for FLUX.2
+Klein 4B, **9.0 GB** for FLUX 3 Image Klein, and **15.2 GB** for Qwen Image 2.1.
+Qwen uses the ChatR Labs fine-tuned transformer rather than the unmodified base.
+All components are downloaded from their upstream publishers, verified by
+SHA-256, and remain subject to their respective licenses.
+
+Downloads are grouped into four readable folders under the chosen directory:
+
+```text
+<download folder>/
+├── Z-Image Turbo/
+│   ├── z_image_turbo-Q8_0.gguf
+│   ├── Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+│   └── ae.safetensors
+├── FLUX.2 Klein 4B/
+├── FLUX 3 Image Klein/
+└── Qwen Image 2.1/
+    ├── qwen-image-2.1-step90000-Q8_0.gguf
+    ├── Qwen3VL-8B-Instruct-Q4_K_M.gguf
+    ├── qwen_image_2.1_vae_bf16.safetensors
+    ├── mmproj-Qwen3VL-8B-Instruct-F16.gguf
+    └── chatrlabs-omni-turbo-8step-fp32.safetensors
+```
+
+Presets with different step counts share the same model files; they never
+create duplicate model downloads. Imported files and older download folders
+remain where they are. When an imported Qwen generator is missing its Turbo
+LoRA, only the missing adapter is downloaded into the organized Qwen folder and
+loaded from there without moving or copying the existing generator. Existing
+partial downloads can be resumed in their original legacy folders.
+To add an existing model directory at launch, pass `--model-dir /path/to/models`.
 
 ## Using popAI
 
-1. Choose a profile in **Settings → Stable Diffusion** and select a size,
-   aspect ratio, and output resolution in **Resolution**.
+1. Choose one of the four models in **Settings → Stable Diffusion**. Click a
+   model to expand its generation presets and select one. Manual changes to
+   sampling settings activate **Custom settings** while keeping that model.
+   Choose a size, aspect ratio, and output resolution in **Resolution**.
 2. Enter a prompt and press **Enter**, or use the arrow button beside **New** and **Hide**.
-   With a Klein profile, use **+** to attach reference images, or the pen beside
+   With a Klein or Qwen profile, use **+** to attach reference images, or the pen beside
    it to sketch a reference. Z-Image Turbo does not accept reference images.
 3. Optionally enhance a description with the magic-wand menu. **Undo** (the
    last option) restores the prior wording when available. The **Cinematic Art**
@@ -81,9 +113,12 @@ FLUX 3 Image Klein. To add a model directory at launch, pass
 | Z-Image Turbo | 9 | 4 or 5 steps | Text only |
 | FLUX.2 Klein 4B | 4 | 2 or 3 steps | Supported |
 | FLUX 3 Image Klein | 16 | 5 or 8 steps | Supported |
+| Qwen Image 2.1 · ChatR Labs Turbo | 8 | 8-step Turbo LoRA | Supported |
 
-The generation engine stays loaded between requests. Automatic weight placement
-can use system RAM when GPU memory is limited. The generator produces a base
+The main engines can stay loaded between requests; Qwen currently uses a separate
+`sd-cli` process per generation. Qwen reference images are copied into temporary,
+size-limited PNGs aligned to multiples of 32, preserving the uploaded originals.
+Automatic weight placement can use system RAM when GPU memory is limited. The generator produces a base
 image, which the upscaler enlarges to fit the exact output dimensions.
 
 The prompt is saved in the browser. Reloading the page draws a new seed and
@@ -96,7 +131,7 @@ clicking the status message below the input restores the prompt. The gear opens
 settings on click and has no hide menu on hover. There is no automatic
 five-second hide timer.
 
-With a Klein model selected, the pen immediately to the right of **+** opens
+With a Klein or Qwen model selected, the pen immediately to the right of **+** opens
 the built-in **4:3** sketch editor (960 × 720 pixels). It includes a brush,
 eraser, text, selection/movement, four resizable shapes (rectangle, ellipse,
 straight line, arrow), a color palette, stroke-size slider and undo/redo.
@@ -192,7 +227,7 @@ running `./start.sh` in a new terminal.
 Run `python3 tools/setup-prompt-enhancer.py` after preparing the local build
 tools. It downloads the pinned Qwen3.5-4B HauhauCS Aggressive GGUF Q8_0 model
 (about 4.48 GB) and builds a dedicated Vulkan llama.cpp server inside the project.
-The enhancer does **not** preload at application startup: it starts on the
+The enhancer does **not** preload at application startup: it starts on
 each **Enhance** request and its process exits after completion, cancellation,
 connection loss or failure to free its VRAM. Vulkan-capable hardware, `glslc`,
 and the local Vulkan/SPIR-V headers under `tools/local` are required. This
@@ -204,9 +239,10 @@ LFM3 and Huihui Q4 model weights are not included or required.
 
 The backend and browser logic tests run without generating images on the GPU.
 The optional headless Chromium sketch tests and their isolated test-server
-instructions are described in the [21.11.26 release notes](docs/release-21.11.26.md),
-with the current Vulkan enhancer and Qwen Q8_0 updates in the
-[22.11.26 release notes](docs/release-22.11.26.md).
+instructions are described in the [21.11.26 release notes](docs/release-21.11.26.md).
+Qwen Image 2.1, grouped presets, model library changes and compatibility
+checks are documented in the [current release notes](docs/release-22-1.11.26.md).
+The Vulkan prompt enhancer introduced in 22.11.26 is unchanged.
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py'

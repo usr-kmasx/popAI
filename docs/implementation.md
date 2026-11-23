@@ -1,8 +1,9 @@
 # popAI — implementação local
 
-Registro da implementação inicial. A substituição posterior do DreamShaper pelo
-Qwen completo está em `qwen-migration.md`. A seleção ativa posterior do Klein
-está documentada em `flux-klein.md`.
+Registro **histórico** da implementação inicial. As trocas posteriores do
+DreamShaper para Qwen normal e Klein constam de `qwen-migration.md` e
+`flux-klein.md`. Para a arquitetura e os quatro modelos atuais, consulte o
+[README](../README.md) e as [notas 22-1.11.26](release-22-1.11.26.md).
 
 Objetivo: DreamShaper 8 / SD 1.5 com stable-diffusion.cpp Vulkan e página local
 com um único campo. Imagem ocupa o painel principal; input sobreposto embaixo,

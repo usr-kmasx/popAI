@@ -88,17 +88,63 @@
       <p id="library-status" role="status" aria-live="polite"></p>
     </section>
     <section id="panel-sd" role="tabpanel" aria-labelledby="tab-sd" hidden>
-      <label class="keep-option"><input id="adaptive-weights" type="checkbox"> Automatic weight placement</label>
-      <div>
-        <label for="model-profile">Generation profile</label>
-        <select id="model-profile"><option value="default">Z-Image Turbo · 9 steps (default)</option><option value="z-image-5">Z-Image Turbo · 5 steps</option><option value="z-image-4">Z-Image Turbo · 4 steps</option><option value="klein">FLUX.2 Klein 4B · 4 steps (default)</option><option value="klein-3">FLUX.2 Klein 4B · 3 steps</option><option value="klein-2">FLUX.2 Klein 4B · 2 steps</option><option value="flux3-klein">FLUX 3 Image Klein · 16 steps (default)</option><option value="flux3-klein-8">FLUX 3 Image Klein · 8 steps</option><option value="flux3-klein-5">FLUX 3 Image Klein · 5 steps</option><option value="custom">Custom</option></select>
+      <div class="profile-selector" aria-labelledby="profile-selector-label">
+        <div class="profile-selector-heading"><span id="profile-selector-label">Generation profile</span><small>Select a model and its generation preset</small></div>
+        <select id="model-profile" hidden aria-label="Generation profile"><option value="default">Z-Image Turbo · 9 steps (default)</option><option value="z-image-5">Z-Image Turbo · 5 steps</option><option value="z-image-4">Z-Image Turbo · 4 steps</option><option value="klein">FLUX.2 Klein 4B · 4 steps (default)</option><option value="klein-3">FLUX.2 Klein 4B · 3 steps</option><option value="klein-2">FLUX.2 Klein 4B · 2 steps</option><option value="flux3-klein">FLUX 3 Image Klein · 16 steps (default)</option><option value="flux3-klein-8">FLUX 3 Image Klein · 8 steps</option><option value="flux3-klein-5">FLUX 3 Image Klein · 5 steps</option><option value="qwen-image21-experimental">Qwen Image 2.1 · ChatR Labs Turbo · 8 steps</option><option value="custom">Custom</option></select>
+        <div id="profile-list" class="profile-list" role="group" aria-labelledby="profile-selector-label">
+          <div class="profile-card" data-family="z-image-turbo">
+            <button type="button" class="profile-card-toggle" aria-expanded="false" aria-controls="profile-variants-z">
+              <span class="profile-avatar" aria-hidden="true">Z</span><span class="profile-card-copy"><span class="profile-name">Z-Image Turbo<span class="profile-current-marker" hidden></span></span><span class="profile-description">Text-to-image generation</span></span>
+              <span class="profile-card-steps">9 steps</span><svg class="profile-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div id="profile-variants-z" class="profile-variants" hidden>
+              <label class="profile-preset" data-profile="default"><input type="radio" name="generation-preset" value="default"><span>Original · 9 steps</span><small>Default</small></label>
+              <label class="profile-preset" data-profile="z-image-5"><input type="radio" name="generation-preset" value="z-image-5"><span>Fast · 5 steps</span></label>
+              <label class="profile-preset" data-profile="z-image-4"><input type="radio" name="generation-preset" value="z-image-4"><span>Faster · 4 steps</span></label>
+            </div>
+          </div>
+          <div class="profile-card" data-family="klein">
+            <button type="button" class="profile-card-toggle" aria-expanded="false" aria-controls="profile-variants-klein">
+              <span class="profile-avatar" aria-hidden="true">F2</span><span class="profile-card-copy"><span class="profile-name">FLUX.2 Klein 4B<span class="profile-current-marker" hidden></span></span><span class="profile-description">Image generation and reference editing</span></span>
+              <span class="profile-card-steps">4 steps</span><svg class="profile-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div id="profile-variants-klein" class="profile-variants" hidden>
+              <label class="profile-preset" data-profile="klein"><input type="radio" name="generation-preset" value="klein"><span>Original · 4 steps</span><small>Default</small></label>
+              <label class="profile-preset" data-profile="klein-3"><input type="radio" name="generation-preset" value="klein-3"><span>Fast · 3 steps</span></label>
+              <label class="profile-preset" data-profile="klein-2"><input type="radio" name="generation-preset" value="klein-2"><span>Faster · 2 steps</span></label>
+            </div>
+          </div>
+          <div class="profile-card" data-family="flux3-klein">
+            <button type="button" class="profile-card-toggle" aria-expanded="false" aria-controls="profile-variants-flux3">
+              <span class="profile-avatar" aria-hidden="true">F3</span><span class="profile-card-copy"><span class="profile-name">FLUX 3 Image Klein<span class="profile-current-marker" hidden></span></span><span class="profile-description">Image generation and reference editing</span></span>
+              <span class="profile-card-steps">16 steps</span><svg class="profile-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div id="profile-variants-flux3" class="profile-variants" hidden>
+              <label class="profile-preset" data-profile="flux3-klein"><input type="radio" name="generation-preset" value="flux3-klein"><span>Original · 16 steps</span><small>Default</small></label>
+              <label class="profile-preset" data-profile="flux3-klein-8"><input type="radio" name="generation-preset" value="flux3-klein-8"><span>Fast · 8 steps</span></label>
+              <label class="profile-preset" data-profile="flux3-klein-5"><input type="radio" name="generation-preset" value="flux3-klein-5"><span>Faster · 5 steps</span></label>
+            </div>
+          </div>
+          <div class="profile-card" data-family="qwen-image21-experimental">
+            <button type="button" class="profile-card-toggle" aria-expanded="false" aria-controls="profile-variants-qwen">
+              <span class="profile-avatar" aria-hidden="true">Q</span><span class="profile-card-copy"><span class="profile-name">Qwen Image 2.1<span class="profile-current-marker" hidden></span></span><span class="profile-description">ChatR Labs Turbo · Reference editing</span></span>
+              <span class="profile-card-steps">8 steps</span><svg class="profile-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div id="profile-variants-qwen" class="profile-variants" hidden>
+              <label class="profile-preset" data-profile="qwen-image21-experimental"><input type="radio" name="generation-preset" value="qwen-image21-experimental"><span>Turbo · 8 steps</span><small>Default</small></label>
+            </div>
+          </div>
+        </div>
+        <div class="profile-custom-row"><div><strong>Custom settings</strong><small>Fine-tune the selected model</small></div><button id="profile-custom" type="button">Edit manually ↗</button></div>
       </div>
+      <div class="profile-sampling-heading"><span>Sampling settings</span><small id="profile-mode">Default</small></div>
       <div class="sd-grid">
         <div><label for="sd-steps">Steps</label><input id="sd-steps" type="number" min="1" max="150" step="1"></div>
         <div><label for="sd-cfg">CFG</label><input id="sd-cfg" type="number" min="0" max="30" step="0.1"></div>
         <div><label for="sd-sampler">Sampler</label><select id="sd-sampler"></select></div>
         <div><label for="sd-scheduler">Scheduler</label><select id="sd-scheduler"></select></div>
       </div>
+      <label class="keep-option"><input id="adaptive-weights" type="checkbox"> Automatic weight placement</label>
       <label class="keep-option"><input id="sd-vae-tiling" type="checkbox"> VAE tiling</label>
       <div><label for="sd-vae-tile-size">VAE tile size in pixels (0 = auto)</label><input id="sd-vae-tile-size" type="number" min="0" max="2048" step="64"></div>
       <label class="keep-option"><input id="sd-mmap" type="checkbox"> Memory-map files (mmap)</label>

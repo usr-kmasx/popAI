@@ -3,19 +3,93 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
 
-function harness(job, dimensions=[1920,1080], decodeFails=false, randomSeed=39, storage=new Map(), localStorage=new Map()) {
+function harness(job, dimensions=[1920,1080], decodeFails=false, randomSeed=39, storage=new Map(), localStorage=new Map(), setup=null) {
   const elements={}, timers=[], calls=[], intervals=[], windowEvents={},frameMessages=[];let now=0;
   function element() {return {style:{},scrollHeight:58,value:'',disabled:false,hidden:true,children:[],events:{},dataset:{},classList:{add(){},remove(){},toggle(){}},setAttribute(){},removeAttribute(name){delete this[name];},focus(){},click(){},showModal(){this.open=true;},close(){this.open=false;this.events.close?.();},querySelectorAll(){return [];},replaceWith(replacement){for(const key of Object.keys(elements))if(elements[key]===this)elements[key]=replacement;},replaceChildren(...items){this.children=items;},append(...items){this.children.push(...items);},addEventListener(event,handler){this.events[event]=handler;}};}
   const query = id => elements[id] ||= element();
   query('#sketch-frame').contentWindow = {postMessage(message,origin){frameMessages.push({message,origin});}};
   Object.assign(query('#wallpaper'),{naturalWidth:dimensions[0],naturalHeight:dimensions[1],async decode(){if(decodeFails) throw Error('decode');}});
+  if (setup) setup({query,element});
   const context=vm.createContext({crypto:{getRandomValues(values){values[0]=randomSeed;return values;}},
+    Option:class {constructor(text,value){this.textContent=text;this.value=value;}},
     document:{addEventListener(){},querySelector:query,createElement:kind=>kind==='canvas'?{getContext:()=>({drawImage(){}}),toBlob:cb=>cb({size:12})}:element()},
     window:{location:{origin:'http://127.0.0.1:7860'},addEventListener(event,handler){windowEvents[event]=handler;},setTimeout:fn=>timers.push(fn),setInterval:fn=>intervals.push(fn),sessionStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value)},localStorage:{getItem:key=>localStorage.get(key)??null,setItem:(key,value)=>localStorage.set(key,value),removeItem:key=>localStorage.delete(key)}},performance:{now:()=>now},Blob,Image:class {constructor(){Object.assign(this,element(),{naturalWidth:dimensions[0],naturalHeight:dimensions[1]});}async decode(){if(decodeFails)throw Error('decode');}},URL:{createObjectURL:()=> 'blob:ref',revokeObjectURL(){}},
     fetch:async(path,options)=>{calls.push({path,options});return {ok:true,json:async()=>{if(path==='/api/reference'){const letter=['a','b','c','d','e','f'][calls.filter(call=>call.path==='/api/reference').length-1];return {id:letter.repeat(32),image:`/references/${letter.repeat(32)}.png`};}return path.split('?')[0]==='/api/status'?job:{};}};}});
   vm.runInContext(fs.readFileSync('web/app.js','utf8'),context);
-  return {elements,query,timers,calls,intervals,windowEvents,frameMessages,advance:ms=>{now+=ms;intervals.forEach(fn=>fn());}};
+  return {elements,query,timers,calls,intervals,windowEvents,frameMessages,context,advance:ms=>{now+=ms;intervals.forEach(fn=>fn());}};
 }
+test('generation profile UI has four expandable model groups and ten existing preset IDs',()=>{
+ const html=fs.readFileSync('web/index.html','utf8');
+ const groups=[...html.matchAll(/class="profile-card" data-family="([^"]+)"/g)].map(x=>x[1]);
+ assert.deepEqual(groups,['z-image-turbo','klein','flux3-klein','qwen-image21-experimental']);
+ const variants=[...html.matchAll(/class="profile-preset" data-profile="([^"]+)"/g)].map(x=>x[1]);
+ assert.deepEqual(variants,['default','z-image-5','z-image-4','klein','klein-3','klein-2','flux3-klein','flux3-klein-8','flux3-klein-5','qwen-image21-experimental']);
+ assert.match(html,/<select id="model-profile" hidden/);
+ assert.match(html,/id="profile-custom"/);
+ assert.match(html,/id="sd-steps"/);
+ assert.match(html,/id="sd-vae-tiling"/);
+});
+
+test('profile cards expand, choose existing presets, and mark edits as Custom',()=>{
+ const familyPresets=[
+  ['z-image-turbo',[['default',9],['z-image-5',5],['z-image-4',4]]],
+  ['klein',[['klein',4],['klein-3',3],['klein-2',2]]],
+  ['flux3-klein',[['flux3-klein',16],['flux3-klein-8',8],['flux3-klein-5',5]]],
+  ['qwen-image21-experimental',[['qwen-image21-experimental',8]]]
+ ];
+ const cards=[], labels=[];
+ const h=harness({state:'idle'},undefined,false,39,new Map(),new Map(),({query,element})=>{
+  for(const [family,options] of familyPresets){
+    const card=element(),toggle=element(),panel=element(),marker=element(),steps=element();
+    card.dataset.family=family;steps.textContent=options[0][1]+' steps';
+    const classes=new Set();card.classList={toggle(key,yes){if(yes)classes.add(key);else classes.delete(key);},contains:key=>classes.has(key)};
+    const rows=options.map(([preset,n],i)=>{
+      const label=element(),radio=element(),span=element(),small=i===0?element():null;
+      label.dataset.profile=preset;radio.value=preset;span.textContent=`Original · ${n} steps`;
+      label.querySelector=key=>({'input':radio,'small':small})[key]||null;
+      return {label,radio,span};
+    });
+    card.querySelector=key=>({
+      '.profile-card-toggle':toggle,'.profile-variants':panel,
+      '.profile-current-marker':marker,'.profile-card-steps':steps,
+      '.profile-preset span':rows[0].span
+    })[key];
+    cards.push({card,toggle,panel,marker,steps,rows});labels.push(...rows.map(r=>r.label));
+  }
+  query('#profile-list').querySelectorAll=key=>key==='.profile-card'?cards.map(row=>row.card):key==='.profile-preset'?labels:[];
+ });
+ const defaults={steps:8,cfg:1,sampler:'euler',scheduler:'simple',vae_tiling:true,vae_tile_size:0,mmap:true};
+ const sdDefaults=Object.fromEntries(familyPresets.flatMap(([family,options])=>options.map(([profile,n])=>[profile,{...defaults,steps:n,scheduler:family==='klein'?'flux2':family==='flux3-klein'?'discrete':family==='qwen-image21-experimental'?'simple':'auto'}])));
+ const families=Object.fromEntries(familyPresets.flatMap(([family,options])=>options.map(([profile])=>[profile,family])));
+ const profiles=Object.fromEntries(familyPresets.map(([family])=>[family,{family}]));
+ h.context.testingCatalog={selected:{sd_defaults:sdDefaults},sd_profile_families:families,profiles,profile_files:{},components:{}};
+ h.query('#model-profile').value='qwen-image21-experimental';
+ vm.runInContext('modelCatalog=testingCatalog; modelFiles=[]; activeFamily="qwen-image21-experimental"; customDraft={...modelCatalog.selected.sd_defaults["qwen-image21-experimental"]}; customModel={profile:"qwen-image21-experimental"}; choosePreset()',h.context);
+ assert.equal(cards[3].panel.hidden,false);
+ assert.equal(cards[3].marker.hidden,false);
+ assert.equal(cards[3].rows[0].radio.checked,true);
+ cards[1].toggle.events.click();
+ assert.equal(cards[1].panel.hidden,false,'Clicking the family expands it');
+ assert.equal(cards[3].panel.hidden,true,'Only one family is expanded');
+ assert.equal(h.query('#model-profile').value,'qwen-image21-experimental','Expansion does not change the saved choice');
+ cards[1].rows[1].radio.events.change();
+ assert.equal(h.query('#model-profile').value,'klein-3');
+ assert.equal(h.query('#sd-steps').value,3);
+ assert.equal(h.query('#sd-scheduler').value,'flux2');
+ assert.equal(cards[1].marker.hidden,false);
+ assert.equal(cards[1].rows[1].radio.checked,true);
+ h.query('#sd-steps').value='7';h.query('#sd-steps').events.input();
+ assert.equal(h.query('#model-profile').value,'custom');
+ assert.equal(h.query('#profile-mode').textContent,'Custom settings');
+ assert.equal(cards[1].marker.hidden,false);
+ assert.equal(cards[1].steps.textContent,'7 steps');
+ cards[3].toggle.events.click();cards[3].rows[0].radio.events.change();
+ assert.equal(h.query('#model-profile').value,'qwen-image21-experimental');
+ assert.equal(h.query('#sd-steps').value,8);
+ h.query('#profile-custom').events.click();
+ assert.equal(h.query('#model-profile').value,'custom');
+});
+
 test('drawing button follows the selected model and submits a sketch through reference upload',async()=>{
  const html=fs.readFileSync('web/index.html','utf8');
  const css=fs.readFileSync('web/style.css','utf8');
@@ -76,6 +150,19 @@ test('drawing button follows the selected model and submits a sketch through ref
  assert.equal(z.query('#draw-reference').hidden,true);
  z.query('#draw-reference').events.click();
  assert.notEqual(z.query('#sketch-dialog').open,true);
+});
+
+test('official Qwen 2.1 profile enables uploaded and drawn references',async()=>{
+ const html=fs.readFileSync('web/index.html','utf8');
+ assert.match(html,/<option value="qwen-image21-experimental">Qwen Image 2.1 · ChatR Labs Turbo/);
+ const h=harness({state:'idle',profile:'qwen-image21-experimental'});
+ await tick();
+ assert.equal(h.query('#add-reference').disabled,false);
+ assert.equal(h.query('#draw-reference').hidden,false);
+ h.query('#reference-file').files=[{type:'image/png',size:400,name:'qwen-ref.png'}];
+ await h.query('#reference-file').events.change();
+ assert.equal(h.query('#reference-preview').children.length,1);
+ assert.equal(h.query('#prompt').placeholder,'Describe the edit you want…');
 });
 
 test('uploaded reference thumbnails open a full-size preview without modifying the reference',async()=>{
@@ -210,6 +297,21 @@ test('display and download use the exact final backend PNG without canvas conver
 test('wrong final resolution is rejected',async()=>{
  const h=await completedHarness({state:'done',id:'wrong',image:'/images/wrong.png'},[768,448]);await tick();assert.equal(h.query('#save').hidden,true);assert.equal(h.query('#prompt').disabled,false);
 });
+test('Qwen CLI progress distinguishes reference reading, sampling and decoding',async()=>{
+ const h=harness({state:'running',phase:'generating',profile:'qwen-image21-experimental',
+     reference_ids:['f'.repeat(32)],elapsed:21,progress:{stage:'conditioning'}});
+ await tick();
+ assert.match(h.query('#status').textContent,/Preparing generation/);
+ assert.equal(h.query('#eta-arc').hidden,true);
+ const job={id:'qwen-live',state:'running',phase:'generating',elapsed:48,
+     progress:{stage:'sampling',unit:'steps',completed:3,total:8,remaining_seconds:65}};
+ const streaming=harness(job);
+ await tick();
+ assert.match(streaming.query('#estimate-message').textContent,/3\/8 steps.*1min 5s/);
+ assert.doesNotMatch(streaming.query('#estimate-message').textContent,/then decode|upscale/);
+ assert.equal(streaming.query('#eta-arc').hidden,false);
+});
+
 test('live steps update the estimate; upscaling and recovery remain separate',async()=>{
  const sampling=harness({state:'running',phase:'generating',elapsed:20,progress:{stage:'sampling',unit:'steps',completed:2,total:9,remaining_seconds:70}});await tick();assert.match(sampling.query('#estimate-message').textContent,/2\/9.*1min 10s/);sampling.advance(1000);assert.match(sampling.query('#status').textContent,/0min 21s/);assert.match(sampling.query('#estimate-message').textContent,/2\/9.*1min 9s/);sampling.advance(1000);assert.match(sampling.query('#status').textContent,/0min 22s/);
  const running=harness({state:'running',phase:'upscaling',elapsed:130});await tick();assert.equal(running.query('#prompt').disabled,true);assert.match(running.query('#status').textContent,/Upscaling.*2min 10s/);assert.equal(running.query('#time-estimate').hidden,false);assert.match(running.query('#estimate-message').textContent,/Upscaling/);

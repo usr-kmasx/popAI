@@ -26,7 +26,7 @@ from model_library import ModelLibrary
 from prompt_enhancer import PromptEnhancer, MAX_PROMPT_CHARS
 from errors import native_failure, explain
 from jobs import JobStore
-from image_pipeline import crop_box, validate_image, finalize
+from image_pipeline import crop_box, validate_image, finalize, prepare_qwen_reference
 from processes import spawn
 from resident import ResidentEngine, terminate
 from app_config import APP_ROOT, RESOURCE_ROOT, SettingsStore, normalize_roots, local_path, HARDWARE_DEFAULTS
@@ -40,7 +40,7 @@ DEFAULT_MODEL_DIR = ROOT / 'models'
 NCNN_EXECUTABLE = ROOT / 'backends/upscayl-ncnn/upscayl-bin'
 DEFAULT_UPSCALER = ROOT / 'backends/upscayl-ncnn/models/realesrgan-x4plus.bin'
 from catalog import ASPECT_RATIOS, GENERATION_SIZES, image_geometry, PROFILES, RESOLUTIONS, SD_DEFAULT, SD_DEFAULTS, CUSTOM_DEFAULTS, MODEL_DEFAULTS, SAMPLERS, SCHEDULERS, normalize_sd, generation_profile
-from catalog import GENERATION_SIZE_LABELS, SD_PROFILE_FAMILIES, component_family
+from catalog import GENERATION_SIZE_LABELS, SD_PROFILE_FAMILIES, PROFILE_FILES, component_family
 MODEL_FILES = {
     'diffusion': 'z_image_turbo-Q8_0.gguf',
     'encoder': 'Qwen3-4B-Instruct-2507-Q4_K_M.gguf',
@@ -305,10 +305,12 @@ class GenerationManager:
             except OSError as exc:
                 errors.append(f'Could not read {root}: {exc}')
         components=self._catalog_components(files)
-        files={p for p,c in components.items() if (c['role']=='diffusion' and c['family'] in PROFILES) or (c['role']=='encoder' and c['family'] in {component_family(f,'encoder') for f in PROFILES}) or (c['role']=='vae' and c['family'] in PROFILES)}
+        families={role:{component_family(f,role) for f in PROFILES}
+                  for role in ('diffusion','encoder','vae','vision')}
+        files={p for p,c in components.items() if c['role'] in families and c['family'] in families[c['role']]}
         return {'files': sorted(files), 'root': str(roots[0]), 'roots': [str(p) for p in roots],
                 'errors': errors, 'selected': self.model_settings(),
-                'profiles': PROFILES, 'sd_profile_families': SD_PROFILE_FAMILIES, 'model_defaults':MODEL_DEFAULTS, 'custom_defaults':CUSTOM_DEFAULTS, 'samplers':SAMPLERS, 'schedulers':SCHEDULERS, 'resolutions': RESOLUTIONS, 'aspect_ratios':list(ASPECT_RATIOS), 'generation_sizes':GENERATION_SIZE_LABELS, 'resolution_options':{ratio:{key:[image_geometry(key,ratio)['width'],image_geometry(key,ratio)['height']] for key in RESOLUTIONS} for ratio in ASPECT_RATIOS}, 'components': {p:components[p] for p in files}}
+                'profiles': PROFILES, 'sd_profile_families': SD_PROFILE_FAMILIES, 'model_defaults':MODEL_DEFAULTS, 'profile_files':PROFILE_FILES, 'custom_defaults':CUSTOM_DEFAULTS, 'samplers':SAMPLERS, 'schedulers':SCHEDULERS, 'resolutions': RESOLUTIONS, 'aspect_ratios':list(ASPECT_RATIOS), 'generation_sizes':GENERATION_SIZE_LABELS, 'resolution_options':{ratio:{key:[image_geometry(key,ratio)['width'],image_geometry(key,ratio)['height']] for key in RESOLUTIONS} for ratio in ASPECT_RATIOS}, 'components': {p:components[p] for p in files}}
 
     def library_status(self):
         catalog=self.model_catalog()
@@ -317,20 +319,29 @@ class GenerationManager:
         for family,defaults in MODEL_DEFAULTS.items():
             present={}
             choices={}
-            for role in ('diffusion','encoder','vae'):
-                expected=component_family(family,role)
-                paths=[p for p in catalog['files'] if catalog['components'][p]['role']==role and catalog['components'][p]['family']==expected]
-                preferred=catalog['selected'].get(role) if catalog['selected']['profile']==family else None
-                paths.sort(key=lambda p:(p!=preferred,Path(p).name!=defaults[role],p.casefold()))
+            required=[entry['role'] for entry in self.library.manifest[family]]
+            for role in required:
+                if role=='lora':
+                    # Imported generators can use a LoRA kept in the organized
+                    # download folder; sd-cli accepts its separate directory.
+                    lora=self.library.find_lora(family, present.get('diffusion'))
+                    paths=[str(lora)] if lora else []
+                else:
+                    expected=component_family(family,role)
+                    paths=[p for p in catalog['files'] if catalog['components'][p]['role']==role and catalog['components'][p]['family']==expected]
+                    preferred=catalog['selected'].get(role) if catalog['selected']['profile']==family else None
+                    paths.sort(key=lambda p:(p!=preferred,Path(p).name!=defaults[role],p.casefold()))
                 choices[role]=paths
                 if paths:present[role]=paths[0]
             remaining=0
             for component in self.library.manifest[family]:
                 if component['role'] in present:continue
-                partial=Path(data['destination'])/family/(component['filename']+'.part') if data['destination'] else None
+                target=self.library.download_target(family, component)
+                partial=target.with_name(target.name+'.part') if target else None
                 received=min(component['size'],partial.stat().st_size) if partial and partial.is_file() else 0
                 remaining+=component['size']-received
-            sets[family]={'present':present,'choices':choices,'complete':len(present)==3,'download_bytes':remaining}
+            sets[family]={'present':present,'choices':choices,'roles':required,
+                          'complete':all(role in present for role in required),'download_bytes':remaining}
         destination=data['destination']
         data.update(sets=sets,catalog=catalog,selection_error=self.selection_error(),verification=self.library.verifications(),needs_setup=not any(s['complete'] for s in sets.values()),
                     free=shutil.disk_usage(destination).free if destination and Path(destination).is_dir() else None)
@@ -361,10 +372,16 @@ class GenerationManager:
                     if not isinstance(requested,dict) or set(requested)!=set(families):
                         raise ValueError('Select the components in the set you want to verify.')
                     for family,selection in requested.items():
-                        if not isinstance(selection,dict) or set(selection)!={'diffusion','encoder','vae'}:
-                            raise ValueError('Select all three components before verifying.')
+                        selectable=set(sets[family]['roles'])-{'lora'}
+                        if not isinstance(selection,dict) or set(selection)!=selectable:
+                            raise ValueError('Select all required components before verifying.')
                         if any(not isinstance(path,str) or path not in sets[family]['choices'][role] for role,path in selection.items()):
                             raise ValueError('Select compatible files from the library folders.')
+                        if 'lora' in sets[family]['roles']:
+                            lora=self.library.find_lora(family, selection['diffusion'])
+                            if not lora:
+                                raise ValueError('Locate or download the Turbo LoRA for this model.')
+                            selection['lora']=str(lora)
                         present[family]=dict(selection)
                 return self.library.start(action,body.get('families'),present)
             raise ValueError('Invalid model action.')
@@ -377,6 +394,8 @@ class GenerationManager:
                 return f'{label} is unavailable in the selected set. Choose components on the Models tab.'
             if verified.get(str(path),{}).get('integrity')=='failed':
                 return f'{label} in the selected set differs from the verified file. Check the component on the Models tab.'
+        if PROFILES.get(self.profile,{}).get('lora') and not self.library.find_lora(self.profile,self.model):
+            return 'Qwen Turbo LoRA is missing. Download it from the Models tab.'
         return None
 
     def _sync_selection(self):
@@ -434,11 +453,14 @@ class GenerationManager:
         roots = normalize_roots(settings.get('model_roots', [str(p) for p in self.library.roots()]))
         for key in ('diffusion', 'encoder', 'vae', 'vision'):
             value = settings.get(key, '')
-            if key == 'vision':
+            if key == 'vision' and not PROFILES[settings['profile']].get('components',{}).get('vision'):
+                paths[key] = None
+                continue
+            if key == 'vision' and not value:
                 paths[key] = None
                 continue
             if not isinstance(value, str) or not value or '\0' in value:
-                raise ValueError(f'The official file {MODEL_DEFAULTS[settings["profile"]][key]} is missing. Check the model folders.')
+                raise ValueError(f'The {key} component is missing for {PROFILES[settings["profile"]]["label"]}. Check the model folders.')
             path = local_path(value)
             if path.suffix.lower() not in {'.gguf', '.safetensors'} or (not allow_missing and (not any(path.is_relative_to(root) for root in roots) or not path.is_file())):
                 raise ValueError(f'Missing or invalid component: {key}. Choose a file from a model folder.')
@@ -497,24 +519,36 @@ class GenerationManager:
                 stream.seek(offset)
                 text = stream.read().decode('utf-8',errors='replace')
             _, start, sampling = text.rpartition('[I] generating image:')
-            if start:
-                text = sampling
-            elif offset == 0:
+            if not start:
+                # Progress bars from Qwen3-VL conditioning, model loading and VAE
+                # are not diffusion steps. Never report them as 1/10 or 1/128 steps.
+                if '[I] generate_image ' in text:
+                    return {'stage':'conditioning'}
+                if '[I] loading ' in text:
+                    return {'stage':'loading_model'}
                 return None
-            if '[I] sampling completed, taking ' in text:
+            if '[I] sampling completed, taking ' in sampling:
                 return {'stage':'vae_decode'}
-            matches = re.findall(r'(\d+)/(\d+)\s*-\s*([\d.]+)(s/it|it/s)',text)
+            matches = re.findall(r'(\d+)/(\d+)\s*-\s*([\d.]+)(s/it|it/s)',sampling)
             if not matches:
-                return None
-            # Each emitted record measures one completed step; ignore loading/I/O bars.
+                return {'stage':'conditioning'}
+            # Each emitted record measures a denoising step. Distinguish its
+            # exact count from similarly formatted conditioning and decode bars.
+            expected = state.get('settings',{}).get('sd',{}).get('steps')
             completed,total = map(int,matches[-1][:2])
+            if expected is not None and total != int(expected):
+                return None
             steps = {}
             for done,count,speed,unit in matches:
                 if int(count)==total and float(speed)>0:
                     steps[int(done)] = float(speed) if unit=='s/it' else 1/float(speed)
             if not 0 < completed <= total or not steps:
                 return None
-            seconds = sum(steps.values())/len(steps)*(total-completed)
+            # The first iteration includes graph compilation; do not multiply
+            # that one-time startup cost across all remaining iterations.
+            warmed = [duration for step,duration in sorted(steps.items()) if step > 1]
+            recent = (warmed[-3:] if warmed else [steps[completed]])
+            seconds = sum(recent)/len(recent)*(total-completed)
             return {'stage':'sampling','unit':'steps','completed':completed,'total':total,
                     'remaining_seconds':seconds,'updated':log.stat().st_mtime}
         except (OSError,ValueError,KeyError):
@@ -556,7 +590,11 @@ class GenerationManager:
                 state['image'] = None
         if state.get('started'):
             state['elapsed'] = round(state.get('finished', time.time()) - state['started'], 1)
-        if state.get('state')=='running' and state.get('phase')=='generating' and not state.get('settings',{}).get('keep_loaded'):
+        if (state.get('state')=='running' and state.get('phase')=='generating'
+                and (not state.get('settings',{}).get('keep_loaded')
+                     or PROFILES.get(state.get('settings',{}).get('profile'),{}).get('cli_only'))):
+            # Qwen Image 2.1 uses sd-cli per generation, even if other models
+            # are configured to keep their engines resident.
             state['progress'] = self._cli_progress(state)
         if state.get('state')=='running' and state.get('phase')=='upscaling':
             state['progress'] = self._upscale_progress(state)
@@ -669,8 +707,10 @@ class GenerationManager:
                 raise RuntimeError('The server is shutting down.')
             if self.job['state'] == 'running':
                 raise RuntimeError('An image is already being generated. Wait for it to finish.')
-            if reference_paths and self.profile == 'z-image-turbo':
-                raise ValueError('Z-Image Turbo only supports text-to-image generation in this app. Remove the reference images.')
+            if reference_paths and not PROFILES[self.profile].get('references',False):
+                raise ValueError(PROFILES[self.profile]['label']+' only supports text-to-image generation in this app. Remove the reference images.')
+            if reference_paths and PROFILES[self.profile].get('components',{}).get('vision') and (not self.vision or not self.vision.is_file()):
+                raise FileNotFoundError('Qwen Image 2.1 requires its Qwen3-VL 8B mmproj vision file for references.')
             if not self.executable.is_file() or not os.access(self.executable, os.X_OK):
                 raise FileNotFoundError('The backend has not been built. Run ./build.sh from the project folder.')
             if not self.upscale_executable.is_file() or not os.access(self.upscale_executable, os.X_OK):
@@ -681,6 +721,11 @@ class GenerationManager:
                 if component is not None and not component.is_file():
                     raise FileNotFoundError(f'Component not found: {component.name}. Check that the SSD is mounted and the model folder is correct.')
             model_catalog.validate(self.profile, {'diffusion':self.model,'encoder':self.encoder,'vae':self.vae,'vision':self.vision if reference_paths else None})
+            lora=None
+            if PROFILES[self.profile].get('lora'):
+                lora=self.library.find_lora(self.profile, self.model)
+                if not lora:
+                    raise FileNotFoundError('Profile LoRA missing. Download it from the Models tab.')
             model_catalog.validate_upscaler(self.upscale_model)
             if self.resident.loaded() and self.resident_policy:
                 policy = self.resident_policy
@@ -697,7 +742,7 @@ class GenerationManager:
             self.job = {'version': 1, 'artifacts_version':2, 'id': identity, 'state': 'running', 'image': None, 'error': None,
                         'started': time.time(), 'seed': seed, 'phase': 'generating',
                         'resolution': self.resolution, 'aspect_ratio':self.aspect_ratio, 'generation_size':self.generation_size, 'hardware': policy, **geometry}
-            self.job['settings'] = {'profile':self.profile, 'diffusion':str(self.model), 'encoder':str(self.encoder), 'vae':str(self.vae), 'vision':str(self.vision) if self.vision else '', 'keep_loaded':self.keep_loaded, 'adaptive_weights':self.adaptive_weights, 'upscale_model':str(self.upscale_model), 'sd':dict(self.sd_custom if self.sd_profile=='custom' else SD_DEFAULTS[self.sd_profile])}
+            self.job['settings'] = {'profile':self.profile, 'diffusion':str(self.model), 'encoder':str(self.encoder), 'vae':str(self.vae), 'vision':str(self.vision) if self.vision else '', 'lora':str(lora) if lora else '', 'keep_loaded':self.keep_loaded, 'adaptive_weights':self.adaptive_weights, 'upscale_model':str(self.upscale_model), 'sd':dict(self.sd_custom if self.sd_profile=='custom' else SD_DEFAULTS[self.sd_profile])}
             self.job['settings']['sd_profile'] = self.sd_profile
             self.job['reference_ids'] = references
             self.job['model_loaded_at_start'] = self.resident.loaded()
@@ -760,7 +805,19 @@ class GenerationManager:
             env.update(GGML_VK_MAX_NODES_PER_SUBMIT='4', GGML_VK_SERIALIZE_SUBMISSIONS='1')
         device = policy['generator']['ggml']
         components = ['--diffusion-model', settings['diffusion'], '--llm', settings['encoder'], '--vae', settings['vae']]
-        runtime_backend = f'diffusion={device},te={device},vae={device}'
+        experimental = profile.get('family') == 'qwen_image21'
+        # Qwen Image 2.1 rounds latent dimensions up to multiples of 32.
+        # Render on that grid, then crop to the size selected in Settings.
+        native_width, native_height = (
+            ((base_width + 31) // 32) * 32, ((base_height + 31) // 32) * 32
+        ) if experimental else (base_width, base_height)
+        lora_file = profile.get('lora')
+        lora = (Path(settings.get('lora') or (Path(settings['diffusion']).parent / lora_file)) if lora_file else None)
+        engine_prompt = f'<lora:{Path(lora_file).stem}:1> {prompt}' if lora_file else prompt
+        # The 8 GiB Polaris card cannot safely host Qwen3-VL 8B + vision + diffusion at once.
+        # Preserve Vulkan for diffusion; use the successfully tested CPU path for vision and VAE.
+        runtime_backend = (f'diffusion={device},te=cpu,vae=cpu' if experimental and reference
+                           else f'diffusion={device},te={device},vae={device}')
         weight_args = ['--auto-fit', 'on'] if settings.get('adaptive_weights') else ['--offload-to-cpu']
         memory_args = list(weight_args)
         if profile['mmap']:
@@ -769,12 +826,18 @@ class GenerationManager:
             memory_args.append('--vae-tiling')
             if profile['vae_tile_size']:
                 memory_args += ['--vae-tile-size',str(profile['vae_tile_size'])]
-        command = [str(self.executable), *components, '-p', prompt,
-                   '-W', str(base_width), '-H', str(base_height), '--steps', profile['steps'], '--cfg-scale', profile['cfg'],
+        command = [str(self.executable), *components, '-p', engine_prompt,
+                   '-W', str(native_width), '-H', str(native_height), '--steps', profile['steps'], '--cfg-scale', profile['cfg'],
                    '--sampling-method', profile['sampler'], '--seed', str(job['seed']), '--backend', runtime_backend,
                    *memory_args, '-o', str(base), *profile['schedule']]
-        for path in reference or []:
-            command.extend(['-r',str(path)])
+        if lora:
+            command.extend(['--lora-model-dir',str(lora.parent)])
+            if reference:
+                vision = Path(settings['vision'])
+                command.extend(['--llm_vision',str(vision)])
+        if not experimental:
+            for path in reference or []:
+                command.extend(['-r',str(path)])
         step_preview = base.with_name('step-preview.png')
         command.extend(['--preview', 'proj', '--preview-interval', '1', '--preview-path', str(step_preview)])
         upscale_model = Path(settings['upscale_model'])
@@ -800,8 +863,15 @@ class GenerationManager:
         try:
             deadline = time.monotonic() + 1800
             base.parent.mkdir(parents=True,exist_ok=True)
+            if experimental and reference:
+                # Originals stay untouched; the vision encoder receives aligned, bounded copies.
+                inputs = []
+                for i, source in enumerate(reference):
+                    self._check_active(deadline)
+                    inputs.append(prepare_qwen_reference(source, base.parent / f'qwen-reference-{i + 1}.png'))
+                command.extend(arg for path in inputs for arg in ('-r', str(path)))
             if not resume:
-                if settings['keep_loaded']:
+                if settings['keep_loaded'] and not profile.get('cli_only'):
                     self._check_active(deadline)
                     server_executable = self.executable.with_name('sd-server')
                     if not server_executable.is_file():
@@ -821,6 +891,11 @@ class GenerationManager:
                     log.write_text('Motor persistente: consulte logs/resident.log.\n', encoding='utf-8')
                 else:
                     generation_seconds = self._run_stage(command, log, env, deadline, 'image generation')
+                if experimental and (native_width, native_height) != (base_width, base_height):
+                    # Reuse atomic PNG validation/cropping before the normal upscale.
+                    # Qwen's extra border (at most 31 px per axis) is not a failed job.
+                    finalize(base, base, (native_width, native_height), (base_width, base_height),
+                             lambda: self._check_active(deadline), max_crop=31)
             crop_box(resized_size, final_size, max_crop)
             intermediate_valid = False
             upscale_validation = None

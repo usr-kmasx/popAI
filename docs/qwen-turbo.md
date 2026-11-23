@@ -1,6 +1,8 @@
 # Qwen Image 2.1 Turbo — 2026-11-17
 
-Histórico: substituído posteriormente por FLUX.2 Klein 4B, conforme `flux-klein.md`.
+Histórico: esta variante Turbo antiga foi substituída por FLUX.2 Klein 4B,
+conforme `flux-klein.md`. A variante oficial atual é o Qwen Image 2.1 ChatR Labs
+Turbo, com componentes e LoRA descritos em [22-1.11.26](release-22-1.11.26.md).
 
 O usuário relatou 471 segundos para Qwen normal, com qualidade muito melhor que
 DreamShaper. Solicitou baixar o Turbo verdadeiro e trocar o backend; o teste de

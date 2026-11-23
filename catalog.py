@@ -30,6 +30,7 @@ PROFILES = {
  'klein': {'label':'FLUX.2 Klein 4B','steps':'4','cfg':'1','schedule':['--scheduler','flux2'], 'family':'klein','references':True},
  'z-image-turbo': {'label':'Z-Image Turbo','steps':'9','cfg':'1','schedule':[], 'family':'z-image-turbo','references':False},
  'flux3-klein': {'label':'FLUX 3 Image Klein','steps':'16','cfg':'1','schedule':['--scheduler','discrete'], 'family':'flux3-klein','references':True, 'components':{'encoder':'qwen3vl-4b','vae':'klein'}},
+ 'qwen-image21-experimental': {'label':'Qwen Image 2.1 · ChatR Labs Turbo', 'steps':'8','cfg':'1', 'schedule':['--scheduler','simple'], 'family':'qwen_image21', 'references':True, 'cli_only':True, 'lora':'chatrlabs-omni-turbo-8step-fp32.safetensors', 'components':{'diffusion':'qwen_image21','encoder':'qwen3vl-8b','vae':'qwen','vision':'qwen3vl-8b'}},
 }
 SD_DEFAULT = {'steps':9, 'cfg':1.0, 'sampler':'euler', 'scheduler':'auto',
               'vae_tiling':True, 'vae_tile_size':0, 'mmap':True}
@@ -53,6 +54,7 @@ SD_DEFAULTS = {
     'klein-3': {**SD_DEFAULT, 'steps': 3, 'scheduler': 'flux2'},
     'klein-2': {**SD_DEFAULT, 'steps': 2, 'scheduler': 'flux2'},
     'flux3-klein': {**SD_DEFAULT, 'steps': 16, 'scheduler': 'discrete'},
+    'qwen-image21-experimental': {**SD_DEFAULT, 'steps': 8, 'cfg': 1.0, 'scheduler': 'simple'},
     **{key: {**SD_DEFAULT, 'steps': len(sigmas) - 1, 'scheduler': 'discrete'}
        for key, sigmas in FLUX3_PRESET_SIGMAS.items()},
 }
@@ -63,12 +65,24 @@ SD_PROFILE_FAMILIES = {
     'klein-3': 'klein',
     'klein-2': 'klein',
     'flux3-klein': 'flux3-klein',
+    'qwen-image21-experimental': 'qwen-image21-experimental',
     **dict.fromkeys(FLUX3_PRESET_SIGMAS, 'flux3-klein'),
 }
 MODEL_DEFAULTS = {'z-image-turbo':{'diffusion':'z_image_turbo-Q8_0.gguf','encoder':'Qwen3-4B-Instruct-2507-Q4_K_M.gguf','vae':'ae.safetensors'}, 'klein':{'diffusion':'flux-2-klein-4b-Q8_0.gguf','encoder':'Qwen3-4B-Q4_K_M.gguf','vae':'flux2-vae.safetensors'}}
 CUSTOM_DEFAULTS = {'z-image-turbo':dict(SD_DEFAULT), 'klein':dict(SD_DEFAULTS['klein'])}
 MODEL_DEFAULTS['flux3-klein'] = {'diffusion':'flux3-image-klein-Q8_0.gguf','encoder':'Qwen3VL-4B-Instruct-Q4_K_M.gguf','vae':'flux2-vae.safetensors'}
 CUSTOM_DEFAULTS['flux3-klein'] = dict(SD_DEFAULTS['flux3-klein'])
+
+# All four models are first-class popAI profiles. Keep the original internal
+# Qwen profile key to preserve saved settings and existing jobs without migration.
+MODEL_DEFAULTS['qwen-image21-experimental'] = {
+    'diffusion':'qwen-image-2.1-step90000-Q8_0.gguf',
+    'encoder':'Qwen3VL-8B-Instruct-Q4_K_M.gguf',
+    'vae':'qwen_image_2.1_vae_bf16.safetensors',
+    'vision':'mmproj-Qwen3VL-8B-Instruct-F16.gguf',
+}
+PROFILE_FILES = MODEL_DEFAULTS
+CUSTOM_DEFAULTS['qwen-image21-experimental'] = dict(SD_DEFAULTS['qwen-image21-experimental'])
 
 
 def component_family(family, role):

@@ -25,7 +25,8 @@ não médias nem promessa de desempenho em outros computadores.
   edição, inclusive alterando passos e selecionando parâmetros personalizados.
 - O mesmo processo do Z-Image foi reutilizado ao trocar a resolução final.
 - Download pelo botão do navegador: PNG 1920×1080 em
-  `/home/usr/Downloads/wallpaper-1920x1080.png`, com SHA-256 idêntico ao preview.
+  `wallpaper-1920x1080.png` na pasta de downloads do navegador, com
+  SHA-256 idêntico ao preview.
 - Contagem por passos e progresso percentual do ampliador observados na interface.
 - Cancelamento durante amostragem real: 0,273 s; motor e supervisor encerrados.
 - Atualizar a página ocultou o resultado e o botão de download.

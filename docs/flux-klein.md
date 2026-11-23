@@ -10,7 +10,8 @@ Nenhuma instalação no sistema ou alteração de drivers.
 
 ## Componentes e configuração
 
-Pasta no SSD: `/run/media/usr/dados/Models/IMG/FLUX.2-klein-4B-GGUF`.
+Arquivos usados nesta etapa: modelos importados de uma pasta selecionada
+na biblioteca. A localização exata é configurável e não é necessária ao projeto.
 
 - Gerador: `flux-2-klein-4b-Q4_K_M.gguf`, Unsloth FLUX.2-klein-4B-GGUF,
   variante destilada de 4 passos, não Base.

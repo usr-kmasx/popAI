@@ -136,3 +136,47 @@ input{width:100%;height:60px;padding:0 54px 0 58px;border:1px solid #ffffff20;bo
 @keyframes settings-backdrop-in{from{opacity:0}}
 @keyframes settings-tab-in{from{transform:translateX(var(--tab-offset,0px))}}
 @keyframes settings-option-in{from{opacity:0;transform:translateY(7px)}}
+
+/* Generation profile picker: four families, each with expandable presets. */
+.profile-selector-heading{display:grid;gap:4px;margin:2px 0 12px}
+.profile-selector-heading>span{font-size:13px;font-weight:570}
+.profile-selector-heading>small{font-size:11px;color:#95a397!important}
+.profile-list{display:grid;gap:8px}
+.profile-card{overflow:hidden;border:1px solid #ffffff19;border-radius:12px;background:#1b211d;transition:border-color .18s,background-color .18s}
+.profile-card.is-expanded{border-color:#99b69a75;background:#202a23}
+.profile-card.is-selected:not(.is-expanded){border-color:#78947a44}
+#model-dialog .profile-card-toggle{display:flex;align-items:center;gap:12px;width:100%;padding:13px 14px;border:0;border-radius:0;background:transparent;text-align:left;color:inherit}
+#model-dialog .profile-card-toggle:hover:enabled{background:#ffffff08}
+.profile-avatar{display:grid;place-items:center;flex-shrink:0;width:36px;height:36px;border:1px solid #ffffff10;border-radius:10px;background:#313c34;color:#b8ccb9;font-size:11px;font-weight:750}
+.profile-card.is-expanded .profile-avatar{background:#3d5442;color:#d2e7d0}
+.profile-card-copy{display:grid;min-width:0;flex:1;gap:2px}
+.profile-name{font-size:13px;font-weight:600;line-height:1.4}
+.profile-description{font-size:11px;color:#9eafa2}
+.profile-current-marker{display:inline-block;width:7px;height:7px;margin-left:6px;vertical-align:middle;border-radius:50%;background:#a4c49f}
+.profile-card-steps{flex-shrink:0;white-space:nowrap;color:#a5b3a7;font-size:11px}
+.profile-chevron{flex-shrink:0;color:#9dab9d;transition:transform .22s}
+.profile-card.is-expanded .profile-chevron{transform:rotate(180deg)}
+.profile-variants{display:grid;gap:4px;padding:0 12px 11px 60px;animation:profile-variants-in .2s ease both}
+#model-dialog .profile-preset{display:flex;align-items:center;gap:10px;min-height:39px;margin:0;padding:9px 11px;border:1px solid transparent;border-radius:8px;color:#c6d0c5;font-size:12px;cursor:pointer}
+#model-dialog .profile-preset:hover{background:#ffffff09}
+#model-dialog .profile-preset.is-selected{border-color:#91b29348;background:#35483a;color:#eff7ed}
+#model-dialog .profile-preset input[type=radio]{appearance:none;display:grid;place-items:center;flex-shrink:0;width:15px;height:15px;margin:0;padding:0;border:1.5px solid #738a79;border-radius:50%;background:transparent;box-shadow:none;cursor:pointer}
+#model-dialog .profile-preset input[type=radio]:checked{border-color:#b8d4b5}
+#model-dialog .profile-preset input[type=radio]:checked::after{content:"";width:7px;height:7px;border-radius:50%;background:#bedbb9}
+.profile-preset>span{flex:1}
+#model-dialog .profile-preset>small{color:#94b99b;font-size:10px}
+.profile-custom-row{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:6px;padding:13px 2px 14px;border-bottom:1px solid #ffffff15}
+.profile-custom-row strong{display:block;font-size:12px;font-weight:570}
+#model-dialog .profile-custom-row small{display:block;margin-top:3px;color:#87988b;font-size:11px}
+#model-dialog #profile-custom{padding:6px 1px;border:0;background:transparent;color:#aec3b0;font-size:12px}
+#model-dialog #profile-custom:hover:enabled{text-decoration:underline}
+.profile-sampling-heading{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:17px 0 9px}
+.profile-sampling-heading>span{font-size:12px;color:#a8b6a9}
+#model-dialog #profile-mode{color:#809789;font-size:10px;text-align:right}
+#model-dialog #panel-sd>.keep-option{margin-top:13px;font-size:12px;color:#c2cbc3}
+@keyframes profile-variants-in{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:520px){#model-dialog .profile-card-toggle{gap:9px;padding:11px 10px}.profile-avatar{width:32px;height:32px}.profile-card-steps{font-size:10px}.profile-variants{padding-left:48px}}
+@media(prefers-reduced-motion:reduce){.profile-variants{animation:none}.profile-chevron,.profile-card{transition:none}}
+/* Keep Save / Cancel reachable while the expanded profile list scrolls. */
+#model-dialog:has(#panel-sd:not([hidden])) .model-actions{position:sticky;z-index:2;bottom:-16px;margin:18px -16px -16px;padding:15px 16px 16px;border-top:1px solid #ffffff16;background:#222824}
+#model-dialog .profile-card-toggle:focus-visible,#model-dialog .profile-preset input[type=radio]:focus-visible,#model-dialog #profile-custom:focus-visible{outline:2px solid #a0c49d;outline-offset:-2px}

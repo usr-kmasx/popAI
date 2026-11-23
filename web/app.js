@@ -188,6 +188,12 @@ const modelButton = document.querySelector('#model-button');
 const hideComposer = document.querySelector('#hide-composer');
 const modelDialog = document.querySelector('#model-dialog');
 const modelProfile = document.querySelector('#model-profile');
+const profileList = document.querySelector('#profile-list');
+const profileCards = [...profileList.querySelectorAll('.profile-card')];
+const profilePresetLabels = [...profileList.querySelectorAll('.profile-preset')];
+const profileCustomButton = document.querySelector('#profile-custom');
+const profileMode = document.querySelector('#profile-mode');
+let expandedProfileFamily = null;
 const modelStatus = document.querySelector('#model-status');
 const modelApply = document.querySelector('#model-apply');
 const outputAspect = document.querySelector('#output-aspect');
@@ -306,11 +312,57 @@ function writeSd(value) {
     else input.value = value[key];
   }
 }
+function renderProfilePicker() {
+  const custom = modelProfile.value === 'custom';
+  for (const card of profileCards) {
+    const family = card.dataset.family;
+    const expanded = family === expandedProfileFamily;
+    const selected = family === activeFamily;
+    card.classList.toggle('is-expanded', expanded);
+    card.classList.toggle('is-selected', selected);
+    card.querySelector('.profile-card-toggle').setAttribute('aria-expanded', String(expanded));
+    card.querySelector('.profile-variants').hidden = !expanded;
+    card.querySelector('.profile-current-marker').hidden = !selected;
+    if (selected) card.querySelector('.profile-card-steps').textContent = `${sdInputs.steps.value} steps`;
+    else {
+      const first = card.querySelector('.profile-preset span').textContent.match(/\d+ steps/);
+      if (first) card.querySelector('.profile-card-steps').textContent = first[0];
+    }
+  }
+  for (const label of profilePresetLabels) {
+    const checked = !custom && label.dataset.profile === modelProfile.value;
+    label.classList.toggle('is-selected', checked);
+    label.querySelector('input').checked = checked;
+  }
+  profileCustomButton.textContent = custom ? 'Custom active ✓' : 'Edit manually ↗';
+  profileMode.textContent = custom ? 'Custom settings' : `${sdInputs.steps.value} steps · ${profilePresetLabels.find(label => label.dataset.profile === modelProfile.value)?.querySelector('small') ? 'Default' : 'Preset'}`;
+}
+
+for (const card of profileCards) {
+  card.querySelector('.profile-card-toggle').addEventListener('click', () => {
+    if (busy) return;
+    expandedProfileFamily = expandedProfileFamily === card.dataset.family ? null : card.dataset.family;
+    renderProfilePicker();
+  });
+}
+for (const label of profilePresetLabels) {
+  label.querySelector('input').addEventListener('change', () => {
+    if (busy) return;
+    modelProfile.value = label.dataset.profile;
+    choosePreset();
+  });
+}
+profileCustomButton.addEventListener('click', () => {
+  if (busy) return;
+  markSamplingCustom();
+  sdInputs.steps.focus();
+});
 function markSamplingCustom() {
   customDraft = readSd();
   customModel = {profile:activeFamily,...Object.fromEntries(['diffusion','encoder','vae','vision'].map(key => [key,modelSlots[key].value]))};
   modelProfile.value = 'custom';
   modelStatus.textContent = '';
+  renderProfilePicker();
 }
 for (const input of Object.values(sdInputs)) input.addEventListener('input',markSamplingCustom);
 let configuring = false;
@@ -385,6 +437,9 @@ function setBusy(value = running) {
   modelButton.disabled = uploading || configuring || stopping || enhancing;
   modelApply.disabled = busy;
   modelProfile.disabled = busy;
+  for (const card of profileCards) card.querySelector('.profile-card-toggle').disabled = busy;
+  for (const label of profilePresetLabels) label.querySelector('input').disabled = busy;
+  profileCustomButton.disabled = busy;
   outputResolution.disabled = busy;
   outputAspect.disabled = busy;
   generationSize.disabled = busy;
@@ -614,15 +669,17 @@ function choosePreset() {
   activeFamily = custom ? (customModel.profile || activeFamily) : modelCatalog.sd_profile_families[modelProfile.value];
   writeSd(custom ? customDraft : modelCatalog.selected.sd_defaults[modelProfile.value]);
   fillComponents(custom ? customModel : {}, !custom);
+  expandedProfileFamily = activeFamily;
   modelStatus.textContent = '';
   setBusy();
+  renderProfilePicker();
 }
 function fillComponents(selected = {}, preset = false) {
-  const family = activeFamily.startsWith('qwen') ? 'qwen' : activeFamily;
+  const family = modelCatalog.profiles[activeFamily]?.family || activeFamily;
   for (const [key, select] of Object.entries(modelSlots)) {
-    const filename = modelCatalog.model_defaults[activeFamily]?.[key];
+    const filename = modelCatalog.profile_files[activeFamily]?.[key];
     const expected = modelCatalog.profiles[activeFamily]?.components?.[key] || (key === 'encoder' ? 'qwen3-4b' : family);
-    const paths = modelFiles.filter(path => key !== 'vision' && modelCatalog.components[path]?.role === key && modelCatalog.components[path]?.family === expected);
+    const paths = modelFiles.filter(path => (key !== 'vision' || modelCatalog.profiles[activeFamily]?.components?.vision) && modelCatalog.components[path]?.role === key && modelCatalog.components[path]?.family === expected);
     paths.sort((a,b) => a.slice(a.lastIndexOf('/')+1).localeCompare(b.slice(b.lastIndexOf('/')+1),undefined,{numeric:true,sensitivity:'base'}));
     select.replaceChildren(new Option(key === 'vision' ? 'None' : 'Select…',''));
     for (const path of paths) {
@@ -633,7 +690,7 @@ function fillComponents(selected = {}, preset = false) {
     const compatible = paths.filter(path => modelCatalog.components[path]?.family === expected);
     const folder = selected.diffusion?.slice(0,selected.diffusion.lastIndexOf('/')+1);
     const match = paths.find(path => path.split('/').pop() === filename) || compatible.find(path => folder && path.startsWith(folder)) || compatible[0] || '';
-    select.value = !preset && paths.includes(selected[key]) ? selected[key] : key === 'vision' && family !== 'qwen' ? '' : match;
+    select.value = !preset && paths.includes(selected[key]) ? selected[key] : key === 'vision' && !modelCatalog.profiles[activeFamily]?.components?.vision ? '' : match;
   }
 }
 function fillCatalog(catalog) {
@@ -739,12 +796,13 @@ async function loadLibrary(revealCards = false) {
     for (const [family,set] of Object.entries(data.sets)) {
       const card=document.createElement('article');card.className='library-card';
       const title=document.createElement('h3');title.textContent=data.catalog.profiles[family].label;
-      const summary=document.createElement('p');summary.textContent=set.complete?'Available':`${Object.keys(set.present).length}/3 components · ${byteSize(set.download_bytes)} to download`;
+      const summary=document.createElement('p');summary.textContent=set.complete?'Available':`${Object.keys(set.present).length}/${set.roles.length} components · ${byteSize(set.download_bytes)} to download`;
       card.append(title,summary);
       const details=document.createElement('details');
       const detailsTitle=document.createElement('summary');detailsTitle.textContent='Components';details.append(detailsTitle);card.append(details);
       const selections={};
-      for(const [role,label] of [['diffusion','Generator'],['encoder','Encoder'],['vae','VAE']]) {
+      for(const role of set.roles.filter(role=>role!=='lora')) {
+        const label={diffusion:'Generator',encoder:'Encoder',vae:'VAE',vision:'Vision (references)'}[role] || role;
         const row=document.createElement('div');row.className='library-component';
         const caption=document.createElement('label');caption.textContent=label;caption.htmlFor=`library-${family}-${role}`;
         const select=document.createElement('select');select.id=caption.htmlFor;
@@ -762,18 +820,25 @@ async function loadLibrary(revealCards = false) {
         updateLocation();select.addEventListener('change',()=>{libraryChoices[family] ||= {};libraryChoices[family][role]=select.value;updateLocation();});
         selections[role]=select;row.append(caption,select,location,verification);details.append(row);
       }
+      if(set.roles.includes('lora')) {
+        const row=document.createElement('div');row.className='library-component';
+        const label=document.createElement('strong');label.textContent='Turbo LoRA';
+        const path=document.createElement('small');
+        path.textContent=set.present.lora || 'Missing — downloaded into the Qwen Image 2.1 folder';
+        row.append(label,path);details.append(row);
+      }
       const actions=document.createElement('div');actions.className='library-toolbar';
       const unavailable=running || data.operation.state==='running';
       actions.append(libraryButton('Select',()=>{
         const selected=Object.fromEntries(Object.entries(selections).map(([role,input])=>[role,input.value]));
-        if (Object.values(selected).some(value=>!value)) {libraryStatus.textContent='Locate or download all three components.';return;}
+        if (Object.values(selected).some(value=>!value)) {libraryStatus.textContent='Locate or download all required components.';return;}
         activeFamily=family;modelProfile.value=family==='z-image-turbo'?'default':family;choosePreset();fillComponents(selected);
         if (Object.entries(selected).some(([role,path])=>path.split('/').pop()!==data.catalog.model_defaults[family][role])) markSamplingCustom();
         libraryStatus.textContent=`${data.catalog.profiles[family].label} selected. Save to apply.`;
       },unavailable || !set.complete));
       actions.append(libraryButton(set.complete?'Verify':'Download / Resume',()=>{
         const components=Object.fromEntries(Object.entries(selections).map(([role,input])=>[role,input.value]));
-        if(set.complete && Object.values(components).some(value=>!value)){libraryStatus.textContent='Select all three components for verification.';return;}
+        if(set.complete && Object.values(components).some(value=>!value)){libraryStatus.textContent='Select all required components for verification.';return;}
         libraryAction({action:set.complete?'verify':'download',families:[family],...(set.complete?{components:{[family]:components}}:{})});
       },unavailable || (!set.complete && !data.destination)));
       if(Object.values(data.managed).some(r=>r.family===family)) actions.append(libraryButton('Remove download',()=>{

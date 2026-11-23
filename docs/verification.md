@@ -1,7 +1,8 @@
 # Histórico: verificação inicial com DreamShaper — 2026-11-17
 
-Este registro é anterior à troca para Qwen Image 2.1. O modelo ativo e a validação
-atual estão documentados em `flux-klein.md`. Os tempos abaixo são do DreamShaper.
+Este registro é anterior aos modelos atuais. As trocas históricas constam de
+`qwen-migration.md` e `flux-klein.md`; o conjunto oficial atual está descrito
+em [22-1.11.26](release-22-1.11.26.md). Os tempos abaixo são do DreamShaper.
 
 - Compilação Release Vulkan concluída com sucesso dentro do projeto.
 - Executável: `backends/stable-diffusion.cpp/build/bin/sd-cli`.

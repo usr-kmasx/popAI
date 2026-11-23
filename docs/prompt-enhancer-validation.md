@@ -4,7 +4,8 @@
 > do modo Cinematic Art. Veja o adendo ao final e as
 > [notas da versão 21.11.26](release-21.11.26.md). Para as mudanças atuais,
 > consulte também a [versão 21-1.11.26](release-21-1.11.26.md). Para o funcionamento atual,
-> consulte [22.11.26](release-22.11.26.md).
+> consulte [22.11.26](release-22.11.26.md) e a versão atual
+> [22-1.11.26](release-22-1.11.26.md), que preserva o mesmo melhorador.
 
 Modelo AtomicChat/LFM3-1.7B-Uncensored-GGUF, AD-Q4_K_M, SHA-256 e tamanho
 conferidos: 1.132.208.000 bytes. Revisão e fontes fixadas em prompt-enhancer.json.

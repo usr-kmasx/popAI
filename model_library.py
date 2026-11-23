@@ -18,6 +18,16 @@ from app_config import RESOURCE_ROOT, local_path, normalize_roots
 import model_catalog
 
 
+# Directory names are user-facing and stable. Sampling presets share the same
+# weights, so they must not create duplicate multi-gigabyte model directories.
+MODEL_SET_DIRECTORIES = {
+    'z-image-turbo': 'Z-Image Turbo',
+    'klein': 'FLUX.2 Klein 4B',
+    'flux3-klein': 'FLUX 3 Image Klein',
+    'qwen-image21-experimental': 'Qwen Image 2.1',
+}
+
+
 class Cancelled(Exception):
     pass
 
@@ -135,6 +145,70 @@ class ModelLibrary:
     def _publish(self, **values):
         with self.lock:self.state.update(values)
 
+    def download_target(self, family, component):
+        """Download all weights for one model into a single named directory."""
+        destination = self.data['destination']
+        if not destination:
+            return None
+        organized = Path(destination) / MODEL_SET_DIRECTORIES[family] / component['filename']
+        legacy = Path(destination) / family / component['filename']
+        # Existing in-progress downloads must keep their resumable .part files.
+        # Fresh downloads always use the readable directory names.
+        if (not organized.exists() and not organized.with_name(organized.name+'.part').exists()
+                and (legacy.exists() or legacy.with_name(legacy.name+'.part').exists())):
+            return legacy
+        return organized
+
+    def find_lora(self, family, diffusion=None):
+        """Locate a model adapter in registered folders without moving files.
+
+        Prefer the imported generator's adapter, then organized downloads.
+        Legacy locations remain supported; no expensive recursive scan is
+        required when one of the conventional locations already has it.
+        """
+        component = next((part for part in self.manifest[family]
+                          if part['role'] == 'lora'), None)
+        if component is None:
+            return None
+        name = component['filename']
+        with self.lock:
+            roots = [Path(root) for root in self.data['roots']]
+            destination = self.data['destination']
+            verified = self.verifications()
+        seen = set()
+
+        def valid(path):
+            path = Path(path)
+            if path in seen or '.popai-trash' in path.parts:
+                return False
+            seen.add(path)
+            try:
+                return (path.is_file() and not path.is_symlink()
+                        and any(path.resolve().is_relative_to(root) for root in roots)
+                        and verified.get(str(path), {}).get('integrity') != 'failed')
+            except OSError:
+                return False
+
+        candidates = []
+        if diffusion:
+            candidates.append(Path(diffusion).parent / name)
+        if destination:
+            candidates.extend((Path(destination) / MODEL_SET_DIRECTORIES[family] / name,
+                               Path(destination) / family / name))
+        for candidate in candidates:
+            if valid(candidate):
+                return candidate
+        for root in roots:
+            if not root.is_dir():
+                continue
+            try:
+                for candidate in root.rglob(name):
+                    if valid(candidate):
+                        return candidate
+            except OSError:
+                continue
+        return None
+
     def start(self, action, families, present):
         if action not in ('download','verify'):raise ValueError('Invalid operation.')
         if not isinstance(families,list) or not families or len(families)>len(self.manifest) or any(not isinstance(f,str) or f not in self.manifest for f in families):
@@ -151,7 +225,7 @@ class ModelLibrary:
                     current=present.get(family,{}).get(component['role'])
                     if action=='download' and current:continue
                     if action=='verify' and not current:raise ValueError('Locate all components before running verification.')
-                    target=Path(current) if current else destination/family/component['filename']
+                    target=Path(current) if current else self.download_target(family, component)
                     tasks.append((family,component,target))
             needed=sum(max(0,c['size']-(p.with_name(p.name+'.part').stat().st_size if p.with_name(p.name+'.part').is_file() else 0)) for _,c,p in tasks) if action=='download' else 0
             if destination and action=='download' and shutil.disk_usage(destination).free < needed+64*1024**2:
@@ -253,7 +327,14 @@ class ModelLibrary:
                         self.data['verified'][str(target)]={'family':family,'role':component['role'],'sha256':reference['sha256'],'actual_sha256':digest,'size':st.st_size,'mtime_ns':st.st_mtime_ns,'official':bool(reference.get('official',old is not None)),'integrity':'failed'}
                         self._save()
                         raise ValueError(f'{target.name} differs from the previously verified file. The app kept the file.')
-                    if action=='verify':model_catalog.validate(family,{component['role']:target})
+                    if action=='verify':
+                        if component['role']=='lora':
+                            info=model_catalog.inspect(target)
+                            if (info['format']!='safetensors'
+                                    or not any('.lora_' in name.lower() for name in info['tensors'])):
+                                raise ValueError('The Turbo LoRA is not a valid LoRA safetensors file.')
+                        else:
+                            model_catalog.validate(family,{component['role']:target})
                     unchanged=previous['sha256']==digest if previous else None
                     integrity='official' if official else 'local' if unchanged else 'changed' if previous else 'unconfirmed'
                     record={'family':family,'role':component['role'],'sha256':digest,'size':st.st_size,'mtime_ns':st.st_mtime_ns,'official':official,'integrity':integrity}

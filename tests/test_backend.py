@@ -73,7 +73,13 @@ if prompt == 'missing': sys.exit(0)
 out = pathlib.Path(args[args.index('-o')+1])
 def chunk(name, data):
     return struct.pack('>I', len(data)) + name + data + struct.pack('>I', zlib.crc32(name + data))
-width,height = (1920,1088) if upscale and prompt != 'unscaled_upscale' else (960,544)
+if '<lora:chatrlabs-omni-turbo-8step-fp32:1>' in prompt:
+    if upscale:
+        width,height = map(int,args[args.index('-r')+1].split('x'))
+    else:
+        width,height = int(args[args.index('-W')+1]),int(args[args.index('-H')+1])
+else:
+    width,height = (1920,1088) if upscale and prompt != 'unscaled_upscale' else (960,544)
 png = b'\\x89PNG\\r\\n\\x1a\\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
 png += chunk(b'IDAT', zlib.compress((b'\\0' + bytes([16, 32, 48])*width)*height)) + chunk(b'IEND', b'')
 out.write_bytes(png if prompt != 'invalid' else b'broken')
@@ -141,6 +147,269 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
         self.assertNotIn('--vae', up_args)
         self.assertEqual(up_args[up_args.index('-i')+1], args[args.index('-o')+1])
         self.assertEqual(len(self.executable.with_suffix('.calls').read_text().splitlines()), 2)
+
+    def test_chatrlabs_experimental_profile_uses_eight_steps_and_turbo_lora(self):
+        from catalog import PROFILES, PROFILE_FILES
+        from model_catalog import diffusion_profile
+        self.assertNotIn('experimental', PROFILES['qwen-image21-experimental'])
+        self.assertIn('qwen-image21-experimental', MODEL_DEFAULTS,
+                      'Qwen must be part of the four official popAI model sets')
+        self.assertEqual(len(MODEL_DEFAULTS), 4)
+        self.assertEqual(set(MODEL_DEFAULTS['qwen-image21-experimental']),
+                         {'diffusion', 'encoder', 'vae', 'vision'})
+        manifest=json.loads((Path(__file__).resolve().parents[1]/'model-downloads.json').read_text())
+        self.assertEqual(set(manifest),set(MODEL_DEFAULTS))
+        self.assertEqual({item['role'] for item in manifest['qwen-image21-experimental']},
+                         {'diffusion','encoder','vae','vision','lora'})
+        self.assertEqual(len(manifest['qwen-image21-experimental']),5)
+        files = PROFILE_FILES['qwen-image21-experimental']
+        for name in files.values():
+            (self.model_dir / name).touch()
+        (self.model_dir / 'chatrlabs-omni-turbo-8step-fp32.safetensors').touch()
+        settings = {**self.manager.model_settings(),
+                    'profile':'qwen-image21-experimental',
+                    'sd_profile':'qwen-image21-experimental',
+                    **{role:str(self.model_dir/name) for role,name in files.items()}}
+        self.manager.configure(settings, persist=True)
+        self.assertEqual(self.manager.store.load()['sd_profile'],'qwen-image21-experimental')
+        self.manager.start('Red boat at sunrise',seed=12)
+        self.assertEqual(self.wait_job()['state'],'done')
+        args = json.loads(self.executable.with_suffix('.args').read_text())
+        self.assertEqual(args[args.index('--steps')+1],'8')
+        self.assertEqual(args[args.index('--cfg-scale')+1],'1.0')
+        self.assertEqual(args[args.index('--scheduler')+1],'simple')
+        self.assertEqual(args[args.index('--lora-model-dir')+1],str(self.model_dir))
+        self.assertEqual(args[args.index('-p')+1],
+                         '<lora:chatrlabs-omni-turbo-8step-fp32:1> Red boat at sunrise')
+        self.assertEqual(args[args.index('--diffusion-model')+1],str(self.model_dir/files['diffusion']))
+        self.assertEqual(args[args.index('--llm')+1],str(self.model_dir/files['encoder']))
+        self.assertEqual(args[args.index('--vae')+1],str(self.model_dir/files['vae']))
+        self.assertEqual(self.manager.model_settings()['profile'],'qwen-image21-experimental')
+
+    def test_official_qwen_library_detects_all_five_dependencies(self):
+        from catalog import PROFILE_FILES
+        files=PROFILE_FILES['qwen-image21-experimental']
+        for name in files.values():
+            (self.model_dir/name).touch()
+        lora=self.model_dir/'chatrlabs-omni-turbo-8step-fp32.safetensors'
+        lora.touch()
+        settings={**self.manager.model_settings(),
+                  'profile':'qwen-image21-experimental',
+                  'sd_profile':'qwen-image21-experimental',
+                  **{role:str(self.model_dir/name) for role,name in files.items()}}
+        self.manager.configure(settings)
+        families={
+            'diffusion':'qwen_image21','encoder':'qwen3vl-8b',
+            'vae':'qwen','vision':'qwen3vl-8b',
+        }
+        components={str(self.model_dir/name):{'role':role,'family':families[role]}
+                    for role,name in files.items()}
+        with patch.object(self.manager,'_catalog_components',return_value=components):
+            library=self.manager.library_status()
+            self.assertEqual(len(library['sets']),4)
+            q=library['sets']['qwen-image21-experimental']
+            self.assertTrue(q['complete'])
+            self.assertEqual(set(q['present']),{'diffusion','encoder','vae','vision','lora'})
+            self.assertEqual(q['present']['lora'],str(lora))
+            self.assertEqual(q['download_bytes'],0)
+            self.assertTrue(all(len(entry['roles'])==3 for family,entry in
+                                library['sets'].items() if family!='qwen-image21-experimental'))
+            lora.unlink()
+            q=self.manager.library_status()['sets']['qwen-image21-experimental']
+            self.assertFalse(q['complete'])
+            self.assertNotIn('lora',q['present'])
+            self.assertEqual(q['download_bytes'],671148320)
+            with self.assertRaisesRegex(ValueError,'LoRA'):
+                self.manager.library_action({'action':'verify',
+                    'families':['qwen-image21-experimental'],
+                    'components':{'qwen-image21-experimental':{
+                        role:q['present'][role] for role in ('diffusion','encoder','vae','vision')}}})
+
+    def test_downloads_group_all_weights_by_model_in_one_named_folder(self):
+        from model_library import MODEL_SET_DIRECTORIES
+        from copy import deepcopy
+        self.manager.library.configure(str(self.model_dir), 'destination')
+        original=self.manager.library.manifest
+        self.manager.library.manifest=deepcopy(original)
+        for parts in self.manager.library.manifest.values():
+            for item in parts:
+                item['size']=1  # No large downloads or disk-space requirements in this test.
+        captured=[]
+        try:
+            with patch.object(self.manager.library, '_run',
+                              side_effect=lambda action,tasks: captured.extend(tasks)):
+                families=list(MODEL_SET_DIRECTORIES)
+                self.manager.library.start('download',families,{family:{} for family in families})
+                self.manager.library.worker.join(timeout=3)
+            self.assertEqual(len(captured),14)
+            for family,component,target in captured:
+                self.assertEqual(target.parent,self.model_dir/MODEL_SET_DIRECTORIES[family])
+                self.assertEqual(target.name,component['filename'])
+            qwen=[(item['role'],target.parent) for family,item,target in captured
+                  if family=='qwen-image21-experimental']
+            self.assertEqual({role for role,_ in qwen},
+                             {'diffusion','encoder','vae','vision','lora'})
+            self.assertEqual(len({str(folder) for _,folder in qwen}),1)
+        finally:
+            self.manager.library.manifest=original
+
+    def test_imported_qwen_uses_lora_from_organized_folder_without_moving_generator(self):
+        from catalog import PROFILE_FILES
+        files=PROFILE_FILES['qwen-image21-experimental']
+        for name in files.values():
+            (self.model_dir/name).touch()
+        package=self.model_dir/'Qwen Image 2.1'
+        package.mkdir()
+        lora=package/'chatrlabs-omni-turbo-8step-fp32.safetensors'
+        lora.touch()
+        settings={**self.manager.model_settings(),
+                  'profile':'qwen-image21-experimental',
+                  'sd_profile':'qwen-image21-experimental',
+                  **{role:str(self.model_dir/name) for role,name in files.items()}}
+        self.manager.configure(settings,persist=True)
+        families={'diffusion':'qwen_image21','encoder':'qwen3vl-8b',
+                  'vae':'qwen','vision':'qwen3vl-8b'}
+        components={str(self.model_dir/name):{'role':role,'family':families[role]}
+                    for role,name in files.items()}
+        with patch.object(self.manager,'_catalog_components',return_value=components):
+            found=self.manager.library_status()['sets']['qwen-image21-experimental']
+        self.assertTrue(found['complete'])
+        self.assertEqual(found['present']['lora'],str(lora))
+        self.manager.start('Organized folders',seed=15)
+        result=self.wait_job()
+        self.assertEqual(result['state'],'done',result.get('error'))
+        arguments=json.loads(self.executable.with_suffix('.args').read_text())
+        self.assertEqual(arguments[arguments.index('--lora-model-dir')+1],str(package))
+        self.assertEqual(arguments[arguments.index('--diffusion-model')+1],
+                         str(self.model_dir/files['diffusion']))
+        self.assertTrue(lora.is_file())
+        self.assertTrue((self.model_dir/files['diffusion']).is_file())
+        self.assertEqual(self.manager.store.load()['sd_profile'],'qwen-image21-experimental')
+
+    def test_qwen_partial_download_queues_only_missing_lora_in_named_folder(self):
+        from catalog import PROFILE_FILES
+        from copy import deepcopy
+        files=PROFILE_FILES['qwen-image21-experimental']
+        for name in files.values():
+            (self.model_dir/name).touch()
+        self.manager.library.configure(str(self.model_dir),'destination')
+        settings={**self.manager.model_settings(),
+                  'profile':'qwen-image21-experimental',
+                  'sd_profile':'qwen-image21-experimental',
+                  **{role:str(self.model_dir/name) for role,name in files.items()}}
+        self.manager.configure(settings)
+        components={str(self.model_dir/name):{'role':role,'family':family}
+                    for role,name,family in [
+                        ('diffusion',files['diffusion'],'qwen_image21'),
+                        ('encoder',files['encoder'],'qwen3vl-8b'),
+                        ('vae',files['vae'],'qwen'),
+                        ('vision',files['vision'],'qwen3vl-8b')]}
+        with patch.object(self.manager,'_catalog_components',return_value=components):
+            q=self.manager.library_status()['sets']['qwen-image21-experimental']
+            self.assertEqual(set(q['present']),{'diffusion','encoder','vae','vision'})
+            self.assertFalse(q['complete'])
+            self.assertEqual(q['download_bytes'],671148320)
+            self.assertIn('Turbo LoRA',self.manager.selection_error())
+            originals=self.manager.library.manifest
+            temporary=deepcopy(originals)
+            for c in temporary['qwen-image21-experimental']:
+                c['size']=1
+            self.manager.library.manifest=temporary
+            captured=[]
+            try:
+                with patch.object(self.manager.library,'_run',
+                                  side_effect=lambda action,tasks:captured.extend(tasks)):
+                    self.manager.library.start('download',['qwen-image21-experimental'],
+                                               {'qwen-image21-experimental':q['present']})
+                    self.manager.library.worker.join(timeout=3)
+                self.assertEqual(len(captured),1)
+                self.assertEqual(captured[0][1]['role'],'lora')
+                self.assertEqual(captured[0][2].parent,self.model_dir/'Qwen Image 2.1')
+            finally:
+                self.manager.library.manifest=originals
+
+    def test_existing_partial_download_resumes_in_legacy_folder(self):
+        from model_library import MODEL_SET_DIRECTORIES
+        self.manager.library.configure(str(self.model_dir),'destination')
+        family='qwen-image21-experimental'
+        component=next(item for item in self.manager.library.manifest[family]
+                       if item['role']=='lora')
+        legacy=self.model_dir/family/component['filename']
+        legacy.parent.mkdir()
+        legacy.with_name(legacy.name+'.part').write_bytes(b'partial download')
+        self.assertEqual(self.manager.library.download_target(family,component),legacy)
+        organized=self.model_dir/MODEL_SET_DIRECTORIES[family]/component['filename']
+        organized.parent.mkdir()
+        organized.with_name(organized.name+'.part').write_bytes(b'new partial')
+        self.assertEqual(self.manager.library.download_target(family,component),organized)
+        self.assertEqual(legacy.with_name(legacy.name+'.part').read_bytes(),b'partial download')
+
+    def test_chatrlabs_experimental_reference_loading_and_multiple_images(self):
+        from catalog import PROFILE_FILES
+        files = PROFILE_FILES['qwen-image21-experimental']
+        for name in files.values():
+            (self.model_dir / name).touch()
+        (self.model_dir / 'chatrlabs-omni-turbo-8step-fp32.safetensors').touch()
+        settings = {**self.manager.model_settings(),
+                    'profile':'qwen-image21-experimental',
+                    'sd_profile':'qwen-image21-experimental',
+                    **{role:str(self.model_dir/name) for role,name in files.items()}}
+        self.manager.configure(settings, persist=True)
+        refs = [self.manager.store_reference(reference_png()) for _ in range(2)]
+        self.manager.start('Preserve image 1, use the colors of image 2',
+                           [r['id'] for r in refs], seed=17)
+        state = self.wait_job()
+        self.assertEqual(state['state'],'done',state.get('error'))
+        args=json.loads(self.executable.with_suffix('.args').read_text())
+        self.assertEqual(args.count('-r'),2)
+        self.assertEqual(args[args.index('--llm_vision')+1],str(self.model_dir/files['vision']))
+        self.assertEqual(args[args.index('--backend')+1],'diffusion=Vulkan0,te=cpu,vae=cpu')
+        self.assertEqual(args[args.index('--lora-model-dir')+1],str(self.model_dir))
+        for i in range(2):
+            tmp=Path(args[[pos for pos,key in enumerate(args) if key=='-r'][i]+1])
+            self.assertEqual(struct.unpack('>II',tmp.read_bytes()[16:24]),(32,32))
+            self.assertNotEqual(tmp,self.manager.references / (refs[i]['id']+'.png'))
+            self.assertEqual(struct.unpack('>II',(self.manager.references / (refs[i]['id']+'.png')).read_bytes()[16:24]),(8,8))
+
+    def test_chatrlabs_references_require_a_vision_file(self):
+        from catalog import PROFILE_FILES
+        files=PROFILE_FILES['qwen-image21-experimental']
+        for role,name in files.items():
+            if role!='vision':(self.model_dir / name).touch()
+        (self.model_dir / 'chatrlabs-omni-turbo-8step-fp32.safetensors').touch()
+        settings={**self.manager.model_settings(),
+                  'profile':'qwen-image21-experimental','sd_profile':'qwen-image21-experimental',
+                  **{role:str(self.model_dir/name) for role,name in files.items() if role!='vision'}, 'vision':''}
+        self.manager.configure(settings,persist=False)
+        ref=self.manager.store_reference(reference_png())
+        with self.assertRaisesRegex(FileNotFoundError,'mmproj'):
+            self.manager.start('Edit the attached image',[ref['id']])
+
+    def test_qwen_experimental_light_uses_native_32_grid_then_exact_requested_crop(self):
+        from catalog import PROFILE_FILES
+        files = PROFILE_FILES['qwen-image21-experimental']
+        for name in files.values():
+            (self.model_dir / name).touch()
+        (self.model_dir / 'chatrlabs-omni-turbo-8step-fp32.safetensors').touch()
+        settings = {**self.manager.model_settings(),
+                    'profile':'qwen-image21-experimental',
+                    'sd_profile':'qwen-image21-experimental',
+                    'generation_size':'light',
+                    **{role:str(self.model_dir / name) for role,name in files.items()}}
+        self.manager.configure(settings, persist=True)
+        from image_pipeline import finalize as native_finalize
+        with patch('server.finalize',wraps=native_finalize) as finalize_checked:
+            self.manager.start('Red boat in a river',seed=13)
+            job = self.wait_job()
+        self.assertEqual(job['state'],'done',job.get('error'))
+        self.assertEqual((job['base_width'],job['base_height']),(768,432))
+        args = json.loads(self.executable.with_suffix('.args').read_text())
+        self.assertEqual((int(args[args.index('-W')+1]),int(args[args.index('-H')+1])),(768,448))
+        crop_calls = [call.args for call in finalize_checked.call_args_list
+                      if call.args[0] == call.args[1]]
+        self.assertTrue(any(args[2:4] == ((768,448),(768,432)) for args in crop_calls))
+        final = self.manager.image_path(job['id'])
+        self.assertEqual(struct.unpack('>II',final.read_bytes()[16:24]),(1920,1080))
 
     def test_zimage_presets_keep_the_requested_seed_and_use_their_own_schedule(self):
         settings = self.manager.model_settings()
@@ -229,6 +498,37 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
         with log.open('a') as stream:
             stream.write('[I] sampling completed, taking 8.00s\n1/2 - 1.00s/it\n')
         self.assertEqual(self.manager._cli_progress(state)['stage'], 'vae_decode')
+
+    def test_qwen_cli_status_uses_real_sampling_even_with_keep_loaded_true(self):
+        # Qwen is a per-job CLI process, not the resident engine. Its log must
+        # be parsed despite the global keep_loaded preference being true.
+        identity='a'*32
+        self.manager.job={'id':identity,'state':'running','phase':'generating',
+                          'started':time.time(),
+                          'settings':{'profile':'qwen-image21-experimental',
+                                      'keep_loaded':True,'sd':{'steps':8}}}
+        log=self.manager.logs/(identity+'.log')
+        log.write_text('[I] loading llm from a.gguf\n')
+        self.assertEqual(self.manager.status()['progress']['stage'],'loading_model')
+        with log.open('a') as stream:
+            stream.write('[I] generate_image 768x448\n\r  |===== 1/10 - 2.00s/it')
+        self.assertEqual(self.manager.status()['progress']['stage'],'conditioning')
+        with log.open('a') as stream:
+            stream.write('\n[I] generating image: 1/1 - seed 42\n'
+                         '\r |===== 1/8 - 32.33s/it - ETA 03:46'
+                         '\r |========= 2/8 - 13.48s/it - ETA 01:21')
+        progress=self.manager.status()['progress']
+        self.assertEqual((progress['completed'],progress['total']),(2,8))
+        self.assertAlmostEqual(progress['remaining_seconds'],13.48*6,delta=3)
+        with log.open('a') as stream:
+            stream.write('\n[I] sampling completed, taking 127.5s\n'
+                         '\r |==== 1/128 - 5.0s/it')
+        self.assertEqual(self.manager.status()['progress']['stage'],'vae_decode')
+        # The existing resident-model path must still use native progress.
+        self.manager.job['settings']['profile']='klein'
+        with patch.object(self.manager,'_cli_progress') as parse_cli:
+            self.manager.status()
+            parse_cli.assert_not_called()
 
     def test_failed_generation_does_not_start_upscaler(self):
         self.manager.start('fail')

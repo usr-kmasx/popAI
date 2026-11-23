@@ -67,5 +67,42 @@
       "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3",
       "url": "https://huggingface.co/Comfy-Org/Flux-2-Klein-4B/resolve/5b3abca5c0dc1ecd4eaf3340868d09063fc1c965/split_files/vae/flux2-vae.safetensors"
     }
+  ],
+  "qwen-image21-experimental": [
+    {
+      "role": "diffusion",
+      "filename": "qwen-image-2.1-step90000-Q8_0.gguf",
+      "size": 7687183136,
+      "sha256": "58ab4d7baaa58ad7bdda18e6aafc22eebce1f494932d08c34667b88ab4fee5ca",
+      "url": "https://huggingface.co/chatrlabs/Qwen-Image-2.1-Uncensored-Omni-Quantized/resolve/8b94e1c/qwen-image-2.1-step90000-Q8_0.gguf"
+    },
+    {
+      "role": "encoder",
+      "filename": "Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+      "size": 5027784800,
+      "sha256": "67d1659bfe71b89d50b45a4ad1a9e5b997e5bb16ce5da66a6a6167abd569e9e2",
+      "url": "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/00e7d63528e65d7b64e80e1293a8360b4af6a594/Qwen3VL-8B-Instruct-Q4_K_M.gguf"
+    },
+    {
+      "role": "vae",
+      "filename": "qwen_image_2.1_vae_bf16.safetensors",
+      "size": 675509688,
+      "sha256": "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9",
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/8150226f50722886a275fa08e7b1fdf961732502/vae/qwen_image_2.1_vae_bf16.safetensors"
+    },
+    {
+      "role": "vision",
+      "filename": "mmproj-Qwen3VL-8B-Instruct-F16.gguf",
+      "size": 1159029824,
+      "sha256": "ca524100ebf825c9a870db1c580d03879e0da0ab2541697e2458e64891cf9d38",
+      "url": "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/00e7d63528e65d7b64e80e1293a8360b4af6a594/mmproj-Qwen3VL-8B-Instruct-F16.gguf"
+    },
+    {
+      "role": "lora",
+      "filename": "chatrlabs-omni-turbo-8step-fp32.safetensors",
+      "size": 671148320,
+      "sha256": "77e8863bed85e7baebd31e242810a708e11071674e42b7c21b0ff9c88cd94b43",
+      "url": "https://huggingface.co/chatrlabs/Qwen-Image-2.1-Uncensored-Omni-LoRA-v0.1/resolve/f8f5b13/chatrlabs-omni-turbo-8step-fp32.safetensors"
+    }
   ]
 }
