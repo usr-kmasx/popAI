@@ -1,6 +1,6 @@
 # popAI
 
-**Current release: 22-1.11.26** · [Release notes](docs/release-22-1.11.26.md) · [Previous release](docs/release-22.11.26.md)
+**Current release: V23.11.26** · [Release notes](docs/release-23.11.26.md) · [Previous release](docs/release-22-1.11.26.md)
 
 Generate, edit, and upscale wallpapers locally on Linux. popAI runs image models
 on Vulkan and exports PNGs up to 4K UHD at 16:9. It serves its interface in your
@@ -8,18 +8,18 @@ browser and runs inference on your computer.
 
 ## Features
 
-- Text-to-image generation with Z-Image Turbo, FLUX.2 Klein 4B, FLUX 3
-  Image Klein, and Qwen Image 2.1 (ChatR Labs Turbo, Q8). Both Klein models and
-  Qwen support editing with up to 10 reference images.
+- Text-to-image generation with Z-Image Turbo, FLUX.2 Klein 4B, and
+  Qwen Image 2.1 (ChatR Labs Turbo, Q8). Klein and Qwen support editing
+  with up to 10 reference images.
 - Real-ESRGAN upscaling through NCNN and Vulkan. Choose the base generation
   size, aspect ratio, and final resolution separately.
-- Model management with four named download folders, reuse of imported models,
+- Model management with three named download folders, reuse of imported models,
   resumable downloads, and SHA-256 checks against the published manifest.
 - Live progress and previews. The total includes preparation, generation,
   upscaling, and PNG finalization. The clock shows an estimate for the current
   stage when progress data is available.
 - On-demand Vulkan prompt enhancement with **Simple**, **More details**,
-  **Creative**, and **Cinematic Art** modes, plus undo and cancellation. The
+  **Creative**, and **Dramatic** modes, plus undo and cancellation. The
   model is unloaded from GPU memory after each enhancement.
 - Built-in 4:3 sketch editor for Klein and Qwen reference images: freehand strokes, text,
   rectangles, ellipses, straight lines, and arrows; selection, resizing,
@@ -29,69 +29,58 @@ browser and runs inference on your computer.
 
 ## Getting started
 
-This is a source release for x86-64 Linux. You need a Vulkan-capable GPU with a
-working driver, Python 3.12 or newer with Pillow, and enough disk space for the
-models you choose. Building the engines requires Git, a C/C++ toolchain, Ninja,
-`patch`, `unzip`, `glslc`, and the Vulkan loader and development libraries. The optional
-direct PNG writer also uses libpng development headers.
+The popAI installer prepares the Linux x86-64 runtime, Vulkan image-generation
+engine, Real-ESRGAN upscaler, and on-demand prompt enhancer with **one command**.
+It works on Arch Linux, Debian and Ubuntu with a Vulkan-capable GPU and a
+working GPU driver. It installs missing system build packages with sudo only
+when needed; all compiled application binaries and Python packages stay under
+the popAI project. Internet access and free disk space are required.
 
-Clone the release and open the project folder.
+Clone the current repository and run the installer **as your normal user**:
 
 ```bash
-git clone --branch 22-1.11.26 https://github.com/usr-kmasx/popAI.git
+git clone https://github.com/usr-kmasx/popAI.git
 cd popAI
+./install.sh
 ```
 
-Follow [Build the image engines](#build-the-image-engines) on a fresh clone.
-With the engines ready and Pillow available, start the app.
+The installer fetches pinned build tools, verifies download hashes, builds the
+local Vulkan engines and upscaler, installs Pillow in a private Python virtual
+environment, and downloads/builds the prompt enhancer (including its 4.48 GB
+local Qwen model). It deletes only the disposable build-download archives
+after successful verification. It does **not** delete your saved projects,
+configurations, images or image-model weights.
+
+When installation finishes, launch the app:
 
 ```bash
 ./start.sh
 ```
 
 Open [popAI on your computer](http://127.0.0.1:7860/). To use a different
-port, run `./start.sh --port 7861`. Press **Ctrl+C** in the terminal to stop
-the server and release its engines.
+port, run `./start.sh --port 7861`. Press **Ctrl+C** in the launch terminal
+to stop the application. The installer does not start the server itself.
 
-In **Settings → Models**, choose one download folder for your model collection,
-or use **Find existing models** to register compatible files without copying them.
-Each set uses a generator, text encoder, and VAE. Qwen additionally requires a
-vision projector for reference editing and the ChatR Labs Turbo LoRA. Download
-sizes are approximately **9.4 GB** for Z-Image Turbo, **7.1 GB** for FLUX.2
-Klein 4B, **9.0 GB** for FLUX 3 Image Klein, and **15.2 GB** for Qwen Image 2.1.
-Qwen uses the ChatR Labs fine-tuned transformer rather than the unmodified base.
-All components are downloaded from their upstream publishers, verified by
-SHA-256, and remain subject to their respective licenses.
+**Image model weights are not downloaded during installation.** On first
+launch the app opens **Settings → Models**. Choose a folder, then download only
+the model(s) you want, or import compatible weights already on disk.
+The three model sets are **Z-Image Turbo**, **FLUX.2 Klein 4B**, and
+**Qwen Image 2.1 · ChatR Labs Turbo**.
 
-Downloads are grouped into four readable folders under the chosen directory:
+To verify a completed installation without downloading or modifying anything:
 
-```text
-<download folder>/
-├── Z-Image Turbo/
-│   ├── z_image_turbo-Q8_0.gguf
-│   ├── Qwen3-4B-Instruct-2507-Q4_K_M.gguf
-│   └── ae.safetensors
-├── FLUX.2 Klein 4B/
-├── FLUX 3 Image Klein/
-└── Qwen Image 2.1/
-    ├── qwen-image-2.1-step90000-Q8_0.gguf
-    ├── Qwen3VL-8B-Instruct-Q4_K_M.gguf
-    ├── qwen_image_2.1_vae_bf16.safetensors
-    ├── mmproj-Qwen3VL-8B-Instruct-F16.gguf
-    └── chatrlabs-omni-turbo-8step-fp32.safetensors
+```bash
+./install.sh --check
 ```
 
-Presets with different step counts share the same model files; they never
-create duplicate model downloads. Imported files and older download folders
-remain where they are. When an imported Qwen generator is missing its Turbo
-LoRA, only the missing adapter is downloaded into the organized Qwen folder and
-loaded from there without moving or copying the existing generator. Existing
-partial downloads can be resumed in their original legacy folders.
-To add an existing model directory at launch, pass `--model-dir /path/to/models`.
+Rerun `./install.sh` to repair/rebuild missing parts. It reuses existing
+verified files and never downloads image-model weights. Hardware-specific GPU
+drivers and an accessible Vulkan device remain prerequisites; an incompatible
+GPU or unavailable upstream download cannot be fixed automatically.
 
 ## Using popAI
 
-1. Choose one of the four models in **Settings → Stable Diffusion**. Click a
+1. Choose one of the three models in **Settings → Stable Diffusion**. Click a
    model to expand its generation presets and select one. Manual changes to
    sampling settings activate **Custom settings** while keeping that model.
    Choose a size, aspect ratio, and output resolution in **Resolution**.
@@ -99,9 +88,9 @@ To add an existing model directory at launch, pass `--model-dir /path/to/models`
    With a Klein or Qwen profile, use **+** to attach reference images, or the pen beside
    it to sketch a reference. Z-Image Turbo does not accept reference images.
 3. Optionally enhance a description with the magic-wand menu. **Undo** (the
-   last option) restores the prior wording when available. The **Cinematic Art**
+   last option) restores the prior wording when available. The **Dramatic**
    enhancer uses the local Qwen3.5-4B HauhauCS Aggressive Q8_0 with sampling
-   temperature `0.3` and a scene-fidelity prompt. Each enhancement sends a
+   temperature `0.3` and a specific dark semi-realistic anime wallpaper art-direction prompt. Each enhancement sends a
    separate request without conversation history; improving, undoing, and improving again reuses the
    original text, not a previous conversation.
 4. When the final PNG appears, drag to pan, use the mouse wheel to zoom, or
@@ -111,15 +100,18 @@ To add an existing model directory at launch, pass `--model-dir /path/to/models`
 | Model | Default steps | Faster presets | Reference editing |
 | --- | ---: | --- | --- |
 | Z-Image Turbo | 9 | 4 or 5 steps | Text only |
-| FLUX.2 Klein 4B | 4 | 2 or 3 steps | Supported |
-| FLUX 3 Image Klein | 16 | 5 or 8 steps | Supported |
-| Qwen Image 2.1 · ChatR Labs Turbo | 8 | 8-step Turbo LoRA | Supported |
+| FLUX.2 Klein 4B | 4 | 3 steps | Supported |
+| Qwen Image 2.1 · ChatR Labs Turbo | 8 | 4 steps (Fast; same LoRA) | Supported |
 
-The main engines can stay loaded between requests; Qwen currently uses a separate
-`sd-cli` process per generation. Qwen reference images are copied into temporary,
-size-limited PNGs aligned to multiples of 32, preserving the uploaded originals.
+All three models use the same resident `sd-server` engine by default, keeping their
+weights loaded between generations. Qwen applies its Turbo LoRA through the server's
+structured LoRA request; the `sd-cli` path remains available when persistence is disabled.
+Qwen reference images are copied into temporary, size-limited PNGs aligned to multiples
+of 32, preserving the uploaded originals.
 Automatic weight placement can use system RAM when GPU memory is limited. The generator produces a base
-image, which the upscaler enlarges to fit the exact output dimensions.
+image, which the upscaler enlarges to fit the exact output dimensions. The NCNN upscaler
+loads its Real-ESRGAN weights from the original model files when needed, using the Linux
+filesystem page cache when available. It releases its Vulkan resources after each job.
 
 The prompt is saved in the browser. Reloading the page draws a new seed and
 restores the current result and reference images while the server is running.
@@ -150,90 +142,26 @@ the integrated editor lives in `web/sketch.html`, `web/sketch.css`, and
 Click Download for a permanent copy of a generated image. The server removes
 temporary images when it shuts down.
 
-## Build the image engines
+## Installation and development notes
 
-Run these commands from the root of a fresh checkout. The build places the
-engines and downloaded tools inside the project. If Pillow is missing, you
-can use a project-local virtual environment.
+`./install.sh` replaces the previous manual multi-command build procedure.
+It prepares the pinned dependencies defined in
+[`sources.json`](sources.json) and
+[`prompt-enhancer.json`](prompt-enhancer.json), applies the project patches,
+and invokes `./build.sh` and `tools/setup-prompt-enhancer.py` as needed.
+These are internal build helpers, **not** additional commands that a new user
+must run.
 
-```bash
-python3 -m venv tools/local/venv
-source tools/local/venv/bin/activate
-python -m pip install Pillow
-```
+The model browser uses [`model-downloads.json`](model-downloads.json) for its
+independently verified image-model downloads. Presets reuse each model's
+weights. Source revisions, manifests, patches and license notices are kept so
+future reinstallations remain reproducible. Disposable downloaded ZIP/tar
+archives are discarded after successful installation; native build sources and
+binaries remain locally for repair and incremental compilation.
 
-Download the pinned CMake and Vulkan headers, the NCNN executor, and the
-Real-ESRGAN weights. The downloader verifies the archives against
-[`sources.json`](sources.json).
-
-```bash
-python3 - <<'PY'
-import json
-from pathlib import Path
-import sys
-
-sys.path.insert(0, "tools")
-from fetch import fetch
-
-sources = json.loads(Path("sources.json").read_text())
-downloads = Path("tools/downloads")
-for name in ("cmake-4.5.0-linux-x86_64.tar.gz", "vulkan-headers.tar.gz"):
-    asset = sources["tools"][name]
-    fetch(asset["url"], downloads / name, asset["sha256"])
-for asset in sources["upscaler"]["packages"]:
-    name = asset["url"].rsplit("/", 1)[-1]
-    fetch(asset["url"], downloads / name, asset["sha256"])
-PY
-
-mkdir -p tools/local backends/upscayl-ncnn
-tar -xzf tools/downloads/cmake-4.5.0-linux-x86_64.tar.gz -C tools
-tar -xzf tools/downloads/vulkan-headers.tar.gz -C tools/local
-
-spirv=tools/local/SPIRV-Headers-main
-git init "$spirv"
-git -C "$spirv" fetch --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git 5c6004e758e0c80185ef2cee93ae5c10fa342a5b
-git -C "$spirv" checkout --detach FETCH_HEAD
-
-upscaler=backends/upscayl-ncnn
-unzip -j tools/downloads/upscayl-bin-20240601-103425-linux.zip '*/upscayl-bin' '*/LICENSE' -d "$upscaler"
-chmod +x "$upscaler/upscayl-bin"
-unzip tools/downloads/realesrgan-ncnn-vulkan-20220424-ubuntu.zip 'models/realesrgan-x4plus.*' -d "$upscaler"
-```
-
-Check out the stable-diffusion.cpp revision, initialize its ggml submodule,
-apply the popAI patches, then build.
-
-```bash
-backend=backends/stable-diffusion.cpp
-git init "$backend"
-git -C "$backend" fetch --depth 1 https://github.com/leejet/stable-diffusion.cpp.git 532d2c15c430a785a712b2d94281f04e733008a4
-git -C "$backend" checkout --detach FETCH_HEAD
-git -C "$backend" submodule update --init --depth 1 ggml
-
-git -C "$backend" apply "$PWD/patches/esrgan-pixel-unshuffle.patch"
-git -C "$backend" apply "$PWD/patches/private-resident-server.patch"
-git -C "$backend" apply "$PWD/patches/esrgan-server-probe.patch"
-
-./build.sh
-```
-
-`./build.sh` also attempts to build the optional NCNN runner for chained
-upscaling and direct PNG output. Set `BUILD_JOBS` to control compilation
-parallelism. If you created a virtual environment, activate it again before
-running `./start.sh` in a new terminal.
-
-## Optional prompt enhancer
-
-Run `python3 tools/setup-prompt-enhancer.py` after preparing the local build
-tools. It downloads the pinned Qwen3.5-4B HauhauCS Aggressive GGUF Q8_0 model
-(about 4.48 GB) and builds a dedicated Vulkan llama.cpp server inside the project.
-The enhancer does **not** preload at application startup: it starts on
-each **Enhance** request and its process exits after completion, cancellation,
-connection loss or failure to free its VRAM. Vulkan-capable hardware, `glslc`,
-and the local Vulkan/SPIR-V headers under `tools/local` are required. This
-configuration intentionally does not fall back silently to CPU. The previous
-LFM3 and Huihui Q4 model weights are not included or required.
-[Prompt enhancer manifest](prompt-enhancer.json)
+On systems with an unsupported distribution or a missing Vulkan driver,
+the script reports the prerequisite instead of claiming a successful setup.
+The supported installer targets are Arch Linux, Debian and Ubuntu on x86-64.
 
 ## Tests
 

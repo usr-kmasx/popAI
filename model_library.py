@@ -23,7 +23,6 @@ import model_catalog
 MODEL_SET_DIRECTORIES = {
     'z-image-turbo': 'Z-Image Turbo',
     'klein': 'FLUX.2 Klein 4B',
-    'flux3-klein': 'FLUX 3 Image Klein',
     'qwen-image21-experimental': 'Qwen Image 2.1',
 }
 

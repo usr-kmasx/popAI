@@ -153,8 +153,8 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
         from model_catalog import diffusion_profile
         self.assertNotIn('experimental', PROFILES['qwen-image21-experimental'])
         self.assertIn('qwen-image21-experimental', MODEL_DEFAULTS,
-                      'Qwen must be part of the four official popAI model sets')
-        self.assertEqual(len(MODEL_DEFAULTS), 4)
+                      'Qwen must be part of the three remaining popAI model sets')
+        self.assertEqual(len(MODEL_DEFAULTS), 3)
         self.assertEqual(set(MODEL_DEFAULTS['qwen-image21-experimental']),
                          {'diffusion', 'encoder', 'vae', 'vision'})
         manifest=json.loads((Path(__file__).resolve().parents[1]/'model-downloads.json').read_text())
@@ -186,6 +186,48 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
         self.assertEqual(args[args.index('--vae')+1],str(self.model_dir/files['vae']))
         self.assertEqual(self.manager.model_settings()['profile'],'qwen-image21-experimental')
 
+    def test_qwen_fast_four_steps_preserves_eight_step_settings(self):
+        from catalog import SD_DEFAULTS, SD_PROFILE_FAMILIES, generation_profile
+        normal=SD_DEFAULTS['qwen-image21-experimental']
+        experimental=SD_DEFAULTS['qwen-image21-4']
+        self.assertEqual(SD_PROFILE_FAMILIES['qwen-image21-4'],
+                         'qwen-image21-experimental')
+        self.assertEqual(experimental['steps'],4)
+        self.assertEqual(normal['steps'],8)
+        self.assertEqual({k:v for k,v in experimental.items() if k!='steps'},
+                         {k:v for k,v in normal.items() if k!='steps'})
+        base=generation_profile(normal,'qwen-image21-experimental',
+                                sd_profile='qwen-image21-experimental',base_size=(768,448))
+        test=generation_profile(experimental,'qwen-image21-experimental',
+                                sd_profile='qwen-image21-4',base_size=(768,448))
+        self.assertEqual(base['schedule'],test['schedule'])
+        self.assertEqual(base['lora'],test['lora'])
+        self.assertEqual(base['cfg'],test['cfg'])
+        self.assertEqual(test['steps'],'4')
+        self.assertEqual(test['schedule'],['--scheduler','simple'])
+        self.assertNotIn('qwen-image21-4-experimental', SD_DEFAULTS)
+
+    def test_legacy_qwen_four_step_profile_migrates_to_fast(self):
+        from catalog import PROFILE_FILES
+        files=PROFILE_FILES['qwen-image21-experimental']
+        for name in files.values():
+            (self.model_dir/name).touch()
+        (self.model_dir/'chatrlabs-omni-turbo-8step-fp32.safetensors').touch()
+        settings={**self.manager.model_settings(),
+                  'profile':'qwen-image21-experimental',
+                  'sd_profile':'qwen-image21-4-experimental',
+                  **{role:str(self.model_dir/name) for role,name in files.items()}}
+        result=self.manager.configure(settings,persist=True)
+        self.assertEqual(result['sd_profile'],'qwen-image21-4')
+        self.assertEqual(self.manager.store.load()['sd_profile'],'qwen-image21-4')
+        self.manager.start('Test fast Qwen',seed=20261122)
+        self.assertEqual(self.wait_job()['state'],'done')
+        args=json.loads(self.executable.with_suffix('.args').read_text())
+        self.assertEqual(args[args.index('--steps')+1],'4')
+        self.assertEqual(args[args.index('--scheduler')+1],'simple')
+        self.assertEqual(args[args.index('--seed')+1],'20261122')
+        self.assertEqual(args[args.index('--lora-model-dir')+1],str(self.model_dir))
+
     def test_official_qwen_library_detects_all_five_dependencies(self):
         from catalog import PROFILE_FILES
         files=PROFILE_FILES['qwen-image21-experimental']
@@ -206,7 +248,7 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
                     for role,name in files.items()}
         with patch.object(self.manager,'_catalog_components',return_value=components):
             library=self.manager.library_status()
-            self.assertEqual(len(library['sets']),4)
+            self.assertEqual(len(library['sets']),3)
             q=library['sets']['qwen-image21-experimental']
             self.assertTrue(q['complete'])
             self.assertEqual(set(q['present']),{'diffusion','encoder','vae','vision','lora'})
@@ -241,7 +283,7 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
                 families=list(MODEL_SET_DIRECTORIES)
                 self.manager.library.start('download',families,{family:{} for family in families})
                 self.manager.library.worker.join(timeout=3)
-            self.assertEqual(len(captured),14)
+            self.assertEqual(len(captured),11)
             for family,component,target in captured:
                 self.assertEqual(target.parent,self.model_dir/MODEL_SET_DIRECTORIES[family])
                 self.assertEqual(target.name,component['filename'])
@@ -363,7 +405,9 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
         args=json.loads(self.executable.with_suffix('.args').read_text())
         self.assertEqual(args.count('-r'),2)
         self.assertEqual(args[args.index('--llm_vision')+1],str(self.model_dir/files['vision']))
-        self.assertEqual(args[args.index('--backend')+1],'diffusion=Vulkan0,te=cpu,vae=cpu')
+        self.assertEqual(args[args.index('--backend')+1],'diffusion=Vulkan0,te=Vulkan0,vae=Vulkan0')
+        self.assertIn('--offload-to-cpu',args)
+        self.assertNotIn('--max-vram',args)
         self.assertEqual(args[args.index('--lora-model-dir')+1],str(self.model_dir))
         for i in range(2):
             tmp=Path(args[[pos for pos,key in enumerate(args) if key=='-r'][i]+1])
@@ -466,18 +510,6 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
         for value, expected in zip(actual, (1.0, .889965177, .729438007, 0.0)):
             self.assertAlmostEqual(value, expected, places=7)
 
-        self.manager.configure({**settings, 'sd_profile': 'klein-2'}, persist=True)
-        self.assertEqual(self.manager.store.load()['sd_profile'], 'klein-2')
-        self.manager.start('Retrato na oficina')
-        self.assertEqual(self.wait_job()['state'], 'done')
-        args = json.loads(self.executable.with_suffix('.args').read_text())
-        self.assertEqual(args[args.index('--steps') + 1], '2')
-        self.assertEqual(args[args.index('--sigmas') + 1], '1.0,0.87,0.0')
-
-        portrait = generation_profile(SD_DEFAULTS['klein-2'], 'klein', sd_profile='klein-2',
-                                      base_size=(576, 768))
-        self.assertEqual(portrait['schedule'], ['--sigmas', '1.0,0.87,0.0'])
-
         self.manager.configure({**settings, 'sd_profile': 'klein'})
         self.manager.start('Retrato na oficina')
         self.assertEqual(self.wait_job()['state'], 'done')
@@ -499,14 +531,14 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
             stream.write('[I] sampling completed, taking 8.00s\n1/2 - 1.00s/it\n')
         self.assertEqual(self.manager._cli_progress(state)['stage'], 'vae_decode')
 
-    def test_qwen_cli_status_uses_real_sampling_even_with_keep_loaded_true(self):
-        # Qwen is a per-job CLI process, not the resident engine. Its log must
-        # be parsed despite the global keep_loaded preference being true.
+    def test_qwen_cli_progress_when_persistence_is_disabled(self):
+        # Only jobs explicitly configured without persistence use the CLI
+        # progress parser; resident Qwen jobs use the native engine progress.
         identity='a'*32
         self.manager.job={'id':identity,'state':'running','phase':'generating',
                           'started':time.time(),
                           'settings':{'profile':'qwen-image21-experimental',
-                                      'keep_loaded':True,'sd':{'steps':8}}}
+                                      'keep_loaded':False,'sd':{'steps':8}}}
         log=self.manager.logs/(identity+'.log')
         log.write_text('[I] loading llm from a.gguf\n')
         self.assertEqual(self.manager.status()['progress']['stage'],'loading_model')
@@ -524,11 +556,44 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
             stream.write('\n[I] sampling completed, taking 127.5s\n'
                          '\r |==== 1/128 - 5.0s/it')
         self.assertEqual(self.manager.status()['progress']['stage'],'vae_decode')
-        # The existing resident-model path must still use native progress.
-        self.manager.job['settings']['profile']='klein'
+        # Resident jobs for either Qwen or Klein use the native progress.
+        self.manager.job['settings']['keep_loaded']=True
         with patch.object(self.manager,'_cli_progress') as parse_cli:
             self.manager.status()
             parse_cli.assert_not_called()
+            self.manager.job['settings']['profile']='klein'
+            self.manager.status()
+            parse_cli.assert_not_called()
+
+    def test_qwen_resident_request_uses_structured_lora_and_same_sampling(self):
+        import base64
+        from resident import ResidentEngine
+        engine=ResidentEngine()
+        engine.log=self.root/'resident-request.log'
+        engine.log.write_text('')
+        source=self.root/'resident-reference.png'
+        source.write_bytes(reference_png())
+        output=self.root/'resident-output.png'
+        response=[{'id':'qwen-job'}, {'status':'completed',
+                  'result':{'images':[{'b64_json':base64.b64encode(reference_png()).decode()}]}}]
+        profile=generation_profile(SD_DEFAULTS['qwen-image21-4'],
+                                   'qwen-image21-experimental',sd_profile='qwen-image21-4',
+                                   base_size=(768,448))
+        with patch.object(engine,'request',side_effect=response) as request:
+            engine.generate('A garden',20261122,profile,[source],output,lambda:None,
+                            width=768,height=448,
+                            lora=self.model_dir/'chatrlabs-omni-turbo-8step-fp32.safetensors')
+        self.assertEqual(output.read_bytes(),reference_png())
+        url,body=request.call_args_list[0].args[:2]
+        self.assertEqual(url,'/sdcpp/v1/img_gen')
+        self.assertEqual(body['prompt'],'A garden')
+        self.assertEqual(body['lora'],[{'path':'chatrlabs-omni-turbo-8step-fp32.safetensors',
+                                        'multiplier':1.0}])
+        self.assertEqual((body['width'],body['height'],body['seed']),(768,448,20261122))
+        self.assertEqual(body['sample_params']['sample_steps'],4)
+        self.assertEqual(body['sample_params']['scheduler'],'simple')
+        self.assertEqual(body['sample_params']['guidance']['txt_cfg'],1.0)
+        self.assertEqual(body['ref_images'],[base64.b64encode(source.read_bytes()).decode()])
 
     def test_failed_generation_does_not_start_upscaler(self):
         self.manager.start('fail')

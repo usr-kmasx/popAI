@@ -56,3 +56,11 @@ legada e a geração simulada com gerador e LoRA em diretórios diferentes.
 URLs e hashes foram confrontados com os metadados publicados, mas não se
 transferiram novamente os 15,22 GB de arquivos nem se mediu desempenho real.
 Veja [22-1.11.26](release-22-1.11.26.md).
+
+## Situação atual — 23/11/2026
+
+A biblioteca do popAI contém três conjuntos: Z-Image Turbo, FLUX.2 Klein 4B
+e Qwen Image 2.1. A família FLUX 3 Image Klein foi removida do catálogo e
+do manifesto. A organização atual usa as pastas homônimas na raiz de modelos,
+com links simbólicos preservando os caminhos legados dos três modelos restantes.
+Os registros acima documentam versões anteriores.

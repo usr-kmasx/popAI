@@ -78,6 +78,10 @@ class ResidentEngine:
                 path = Path(command[command.index(flag)+1])
                 stat = path.stat()
                 components.append((str(path),stat.st_size,stat.st_mtime_ns))
+        if vision:
+            path = Path(vision)
+            stat = path.stat()
+            components.append((str(path),stat.st_size,stat.st_mtime_ns))
         signature = (tuple(command),tuple(components),str(root),tuple((key,env.get(key)) for key in ('GGML_VK_VISIBLE_DEVICES','GGML_VK_MAX_NODES_PER_SUBMIT','GGML_VK_SERIALIZE_SUBMISSIONS','VK_DRIVER_FILES','VK_ICD_FILENAMES')))
         if self.loaded() and self.signature == signature and (not vision or self.has_vision):
             return
@@ -116,7 +120,7 @@ class ResidentEngine:
                 pass
             time.sleep(.2)
 
-    def generate(self, prompt, seed, profile, references, output, check, width=960, height=544, on_progress=None, preview_path=None):
+    def generate(self, prompt, seed, profile, references, output, check, width=960, height=544, on_progress=None, preview_path=None, lora=None):
         self.log_start = self.log.stat().st_size if self.log and self.log.exists() else 0
         sample = {'sample_method': profile.get('sampler', 'euler'), 'sample_steps': int(profile['steps']),
                   'guidance': {'txt_cfg': float(profile['cfg'])}}
@@ -129,6 +133,7 @@ class ResidentEngine:
             'prompt': prompt, 'width': width, 'height': height, 'seed': seed,
             'sample_params': sample, 'vae_tiling_params': {'enabled': profile.get('vae_tiling',True), **({'tile_size_w':profile['vae_tile_size'],'tile_size_h':profile['vae_tile_size']} if profile.get('vae_tile_size') else {})},
             'ref_images': [base64.b64encode(path.read_bytes()).decode('ascii') for path in references],
+            **({'lora': [{'path': lora.name, 'multiplier': 1.0}]} if lora else {}),
             'batch_count': 1, 'preview': 'proj' if preview_path else 'none',
             'preview_interval': 1, 'output_format': 'png',
         }, timeout=30)

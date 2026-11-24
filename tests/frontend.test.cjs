@@ -18,13 +18,16 @@ function harness(job, dimensions=[1920,1080], decodeFails=false, randomSeed=39, 
   vm.runInContext(fs.readFileSync('web/app.js','utf8'),context);
   return {elements,query,timers,calls,intervals,windowEvents,frameMessages,context,advance:ms=>{now+=ms;intervals.forEach(fn=>fn());}};
 }
-test('generation profile UI has four expandable model groups and ten existing preset IDs',()=>{
+test('generation profile UI has three expandable model groups and seven approved preset IDs',()=>{
  const html=fs.readFileSync('web/index.html','utf8');
  const groups=[...html.matchAll(/class="profile-card" data-family="([^"]+)"/g)].map(x=>x[1]);
- assert.deepEqual(groups,['z-image-turbo','klein','flux3-klein','qwen-image21-experimental']);
+ assert.deepEqual(groups,['z-image-turbo','klein','qwen-image21-experimental']);
  const variants=[...html.matchAll(/class="profile-preset" data-profile="([^"]+)"/g)].map(x=>x[1]);
- assert.deepEqual(variants,['default','z-image-5','z-image-4','klein','klein-3','klein-2','flux3-klein','flux3-klein-8','flux3-klein-5','qwen-image21-experimental']);
+ assert.deepEqual(variants,['default','z-image-5','z-image-4','klein','klein-3','qwen-image21-experimental','qwen-image21-4']);
  assert.match(html,/<select id="model-profile" hidden/);
+ assert.match(html,/data-profile="qwen-image21-experimental"[^>]*>.*Original · 8 steps<\/span><small>Default<\/small>/);
+ assert.match(html,/data-profile="qwen-image21-4"[^>]*>.*Fast · 4 steps/);
+ assert.doesNotMatch(html,/Experimental · 4 steps/);
  assert.match(html,/id="profile-custom"/);
  assert.match(html,/id="sd-steps"/);
  assert.match(html,/id="sd-vae-tiling"/);
@@ -33,9 +36,8 @@ test('generation profile UI has four expandable model groups and ten existing pr
 test('profile cards expand, choose existing presets, and mark edits as Custom',()=>{
  const familyPresets=[
   ['z-image-turbo',[['default',9],['z-image-5',5],['z-image-4',4]]],
-  ['klein',[['klein',4],['klein-3',3],['klein-2',2]]],
-  ['flux3-klein',[['flux3-klein',16],['flux3-klein-8',8],['flux3-klein-5',5]]],
-  ['qwen-image21-experimental',[['qwen-image21-experimental',8]]]
+  ['klein',[['klein',4],['klein-3',3]]],
+  ['qwen-image21-experimental',[['qwen-image21-experimental',8],['qwen-image21-4',4]]]
  ];
  const cards=[], labels=[];
  const h=harness({state:'idle'},undefined,false,39,new Map(),new Map(),({query,element})=>{
@@ -59,18 +61,18 @@ test('profile cards expand, choose existing presets, and mark edits as Custom',(
   query('#profile-list').querySelectorAll=key=>key==='.profile-card'?cards.map(row=>row.card):key==='.profile-preset'?labels:[];
  });
  const defaults={steps:8,cfg:1,sampler:'euler',scheduler:'simple',vae_tiling:true,vae_tile_size:0,mmap:true};
- const sdDefaults=Object.fromEntries(familyPresets.flatMap(([family,options])=>options.map(([profile,n])=>[profile,{...defaults,steps:n,scheduler:family==='klein'?'flux2':family==='flux3-klein'?'discrete':family==='qwen-image21-experimental'?'simple':'auto'}])));
+ const sdDefaults=Object.fromEntries(familyPresets.flatMap(([family,options])=>options.map(([profile,n])=>[profile,{...defaults,steps:n,scheduler:family==='klein'?'flux2':family==='qwen-image21-experimental'?'simple':'auto'}])));
  const families=Object.fromEntries(familyPresets.flatMap(([family,options])=>options.map(([profile])=>[profile,family])));
  const profiles=Object.fromEntries(familyPresets.map(([family])=>[family,{family}]));
  h.context.testingCatalog={selected:{sd_defaults:sdDefaults},sd_profile_families:families,profiles,profile_files:{},components:{}};
  h.query('#model-profile').value='qwen-image21-experimental';
  vm.runInContext('modelCatalog=testingCatalog; modelFiles=[]; activeFamily="qwen-image21-experimental"; customDraft={...modelCatalog.selected.sd_defaults["qwen-image21-experimental"]}; customModel={profile:"qwen-image21-experimental"}; choosePreset()',h.context);
- assert.equal(cards[3].panel.hidden,false);
- assert.equal(cards[3].marker.hidden,false);
- assert.equal(cards[3].rows[0].radio.checked,true);
+ assert.equal(cards[2].panel.hidden,false);
+ assert.equal(cards[2].marker.hidden,false);
+ assert.equal(cards[2].rows[0].radio.checked,true);
  cards[1].toggle.events.click();
  assert.equal(cards[1].panel.hidden,false,'Clicking the family expands it');
- assert.equal(cards[3].panel.hidden,true,'Only one family is expanded');
+ assert.equal(cards[2].panel.hidden,true,'Only one family is expanded');
  assert.equal(h.query('#model-profile').value,'qwen-image21-experimental','Expansion does not change the saved choice');
  cards[1].rows[1].radio.events.change();
  assert.equal(h.query('#model-profile').value,'klein-3');
@@ -83,9 +85,14 @@ test('profile cards expand, choose existing presets, and mark edits as Custom',(
  assert.equal(h.query('#profile-mode').textContent,'Custom settings');
  assert.equal(cards[1].marker.hidden,false);
  assert.equal(cards[1].steps.textContent,'7 steps');
- cards[3].toggle.events.click();cards[3].rows[0].radio.events.change();
+ cards[2].toggle.events.click();cards[2].rows[0].radio.events.change();
  assert.equal(h.query('#model-profile').value,'qwen-image21-experimental');
  assert.equal(h.query('#sd-steps').value,8);
+ cards[2].rows[1].radio.events.change();
+ assert.equal(h.query('#model-profile').value,'qwen-image21-4');
+ assert.equal(h.query('#sd-steps').value,4);
+ assert.equal(h.query('#sd-scheduler').value,'simple');
+ assert.equal(cards[2].rows[1].radio.checked,true);
  h.query('#profile-custom').events.click();
  assert.equal(h.query('#model-profile').value,'custom');
 });
@@ -154,7 +161,7 @@ test('drawing button follows the selected model and submits a sketch through ref
 
 test('official Qwen 2.1 profile enables uploaded and drawn references',async()=>{
  const html=fs.readFileSync('web/index.html','utf8');
- assert.match(html,/<option value="qwen-image21-experimental">Qwen Image 2.1 · ChatR Labs Turbo/);
+ assert.match(html,/<option value="qwen-image21-experimental">Qwen Image 2.1 · 8 steps \(default\)/);
  const h=harness({state:'idle',profile:'qwen-image21-experimental'});
  await tick();
  assert.equal(h.query('#add-reference').disabled,false);

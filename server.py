@@ -424,8 +424,9 @@ class GenerationManager:
         sd_profile = settings.get('sd_profile', self.sd_profile)
         if sd_profile == 'default' and settings['profile'] == 'z-image-turbo' and settings.get('experimental_five_steps') is True:
             sd_profile = 'z-image-5'
-        if sd_profile == 'flux3-klein-6':
-            sd_profile = 'flux3-klein-5'
+        # Keep a previously saved preview ID compatible with the official 4-step preset.
+        if sd_profile == 'qwen-image21-4-experimental':
+            sd_profile = 'qwen-image21-4'
         if sd_profile not in (*SD_DEFAULTS,'custom'):
             raise ValueError('Select an available profile or Custom.')
         if sd_profile != 'custom' and settings['profile'] != SD_PROFILE_FAMILIES[sd_profile]:
@@ -591,10 +592,8 @@ class GenerationManager:
         if state.get('started'):
             state['elapsed'] = round(state.get('finished', time.time()) - state['started'], 1)
         if (state.get('state')=='running' and state.get('phase')=='generating'
-                and (not state.get('settings',{}).get('keep_loaded')
-                     or PROFILES.get(state.get('settings',{}).get('profile'),{}).get('cli_only'))):
-            # Qwen Image 2.1 uses sd-cli per generation, even if other models
-            # are configured to keep their engines resident.
+                and not state.get('settings',{}).get('keep_loaded')):
+            # The CLI progress parser is only used when persistence is disabled.
             state['progress'] = self._cli_progress(state)
         if state.get('state')=='running' and state.get('phase')=='upscaling':
             state['progress'] = self._upscale_progress(state)
@@ -805,19 +804,16 @@ class GenerationManager:
             env.update(GGML_VK_MAX_NODES_PER_SUBMIT='4', GGML_VK_SERIALIZE_SUBMISSIONS='1')
         device = policy['generator']['ggml']
         components = ['--diffusion-model', settings['diffusion'], '--llm', settings['encoder'], '--vae', settings['vae']]
-        experimental = profile.get('family') == 'qwen_image21'
+        is_qwen = profile.get('family') == 'qwen_image21'
         # Qwen Image 2.1 rounds latent dimensions up to multiples of 32.
         # Render on that grid, then crop to the size selected in Settings.
         native_width, native_height = (
             ((base_width + 31) // 32) * 32, ((base_height + 31) // 32) * 32
-        ) if experimental else (base_width, base_height)
+        ) if is_qwen else (base_width, base_height)
         lora_file = profile.get('lora')
         lora = (Path(settings.get('lora') or (Path(settings['diffusion']).parent / lora_file)) if lora_file else None)
         engine_prompt = f'<lora:{Path(lora_file).stem}:1> {prompt}' if lora_file else prompt
-        # The 8 GiB Polaris card cannot safely host Qwen3-VL 8B + vision + diffusion at once.
-        # Preserve Vulkan for diffusion; use the successfully tested CPU path for vision and VAE.
-        runtime_backend = (f'diffusion={device},te=cpu,vae=cpu' if experimental and reference
-                           else f'diffusion={device},te={device},vae={device}')
+        runtime_backend = f'diffusion={device},te={device},vae={device}'
         weight_args = ['--auto-fit', 'on'] if settings.get('adaptive_weights') else ['--offload-to-cpu']
         memory_args = list(weight_args)
         if profile['mmap']:
@@ -835,7 +831,7 @@ class GenerationManager:
             if reference:
                 vision = Path(settings['vision'])
                 command.extend(['--llm_vision',str(vision)])
-        if not experimental:
+        if not is_qwen:
             for path in reference or []:
                 command.extend(['-r',str(path)])
         step_preview = base.with_name('step-preview.png')
@@ -863,15 +859,16 @@ class GenerationManager:
         try:
             deadline = time.monotonic() + 1800
             base.parent.mkdir(parents=True,exist_ok=True)
-            if experimental and reference:
+            resident_references = reference or []
+            if is_qwen and reference:
                 # Originals stay untouched; the vision encoder receives aligned, bounded copies.
-                inputs = []
+                resident_references = []
                 for i, source in enumerate(reference):
                     self._check_active(deadline)
-                    inputs.append(prepare_qwen_reference(source, base.parent / f'qwen-reference-{i + 1}.png'))
-                command.extend(arg for path in inputs for arg in ('-r', str(path)))
+                    resident_references.append(prepare_qwen_reference(source, base.parent / f'qwen-reference-{i + 1}.png'))
+                command.extend(arg for path in resident_references for arg in ('-r', str(path)))
             if not resume:
-                if settings['keep_loaded'] and not profile.get('cli_only'):
+                if settings['keep_loaded']:
                     self._check_active(deadline)
                     server_executable = self.executable.with_name('sd-server')
                     if not server_executable.is_file():
@@ -879,19 +876,22 @@ class GenerationManager:
                     startup = [str(server_executable), *components,
                                '--backend', runtime_backend,
                                *weight_args, *(['--mmap'] if profile['mmap'] else [])]
+                    if lora:
+                        startup.extend(['--lora-model-dir', str(lora.parent)])
+                    vision = Path(settings['vision']) if is_qwen and reference else None
                     check = lambda: self._check_active(deadline)
                     started = time.monotonic()
                     self.resident.ensure(startup, env, ROOT, self.logs / 'resident.log',
-                                         None, check)
+                                         vision, check)
                     self.resident_policy = policy
-                    self.resident.generate(prompt, job['seed'], profile, reference or [], base, check,
-                                           width=base_width, height=base_height, on_progress=self._native_progress,
-                                           preview_path=step_preview)
+                    self.resident.generate(prompt, job['seed'], profile, resident_references, base, check,
+                                           width=native_width, height=native_height,
+                                           on_progress=self._native_progress, preview_path=step_preview, lora=lora)
                     generation_seconds = round(time.monotonic() - started, 2)
                     log.write_text('Motor persistente: consulte logs/resident.log.\n', encoding='utf-8')
                 else:
                     generation_seconds = self._run_stage(command, log, env, deadline, 'image generation')
-                if experimental and (native_width, native_height) != (base_width, base_height):
+                if is_qwen and (native_width, native_height) != (base_width, base_height):
                     # Reuse atomic PNG validation/cropping before the normal upscale.
                     # Qwen's extra border (at most 31 px per axis) is not a failed job.
                     finalize(base, base, (native_width, native_height), (base_width, base_height),
@@ -1013,8 +1013,12 @@ def create_server(manager, port=7860):
                 hashes = ' '.join("'sha256-"+base64.b64encode(hashlib.sha256(style).digest()).decode()+"'" for style in styles)
                 policy = "default-src 'none'; style-src "+(hashes or "'none'")+"; frame-ancestors 'none'"
             self.send_header('Content-Security-Policy',policy)
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                # The browser abandoned the request; no response can be sent now.
+                self.close_connection = True
 
         def valid_host(self):
             return self.headers.get('Host') in {f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}'}

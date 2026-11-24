@@ -6,11 +6,12 @@ import argparse
 import hashlib
 import json
 import random
+import re
 import shutil
 import socket
 import struct
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 def public_lookup(name):
@@ -44,19 +45,60 @@ def enable_fallback():
     socket.getaddrinfo=resolve
 
 
-def fetch(url,path,sha256=None):
-    path=Path(path);path.parent.mkdir(parents=True,exist_ok=True)
-    temporary=path.with_name(path.name+'.part')
+def fetch(url, path, sha256=None, *, expected_size=None, resume=False):
+    """Download and verify an asset. Optional resume keeps partial large models.
+
+    The original destination is only published after the whole file is checked.
+    Ordinary build-tool downloads keep the previous no-resume behavior.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + '.part')
+    offset = temporary.stat().st_size if resume and temporary.is_file() else 0
+    if resume and temporary.is_symlink():
+        raise ValueError('Partial download must not be a symbolic link: ' + str(temporary))
+    if expected_size is not None and offset > expected_size:
+        raise ValueError('Partial download exceeds the expected size: ' + str(temporary))
     try:
-        with urlopen(url,timeout=60) as response,temporary.open('wb') as output:shutil.copyfileobj(response,output)
-        digest=hashlib.file_digest(temporary.open('rb'),'sha256').hexdigest()
-        if sha256 and digest!=sha256:raise ValueError('SHA256 mismatch: '+str(path))
+        headers = {'Accept-Encoding': 'identity'}
+        if offset:
+            headers['Range'] = f'bytes={offset}-'
+        with urlopen(Request(url, headers=headers), timeout=60) as response:
+            if offset:
+                if response.status == 206:
+                    content_range = re.fullmatch(r'bytes (\d+)-(\d+)/(\d+)', response.headers.get('Content-Range', ''))
+                    if not content_range or int(content_range[1]) != offset or (
+                            expected_size is not None and (
+                                int(content_range[3]) != expected_size
+                                or int(content_range[2]) != expected_size - 1)):
+                        raise ValueError('Server returned an invalid resume range: ' + str(path))
+                elif response.status == 200:
+                    offset = 0  # Server does not support Range; restart the file safely.
+                else:
+                    raise ValueError('Server refused the resumed download: ' + str(path))
+            declared = response.headers.get('Content-Length')
+            if expected_size is not None and declared is not None:
+                if int(declared) != expected_size - offset:
+                    raise ValueError('Server reported the wrong download length: ' + str(path))
+            with temporary.open('ab' if offset else 'wb') as output:
+                while chunk := response.read(1024 * 1024):
+                    output.write(chunk)
+                output.flush()
+        if expected_size is not None and temporary.stat().st_size != expected_size:
+            raise ValueError('Incomplete download; rerun to resume: ' + str(path))
+        with temporary.open('rb') as source:
+            digest = hashlib.file_digest(source, 'sha256').hexdigest()
+        if sha256 and digest != sha256:
+            temporary.unlink(missing_ok=True)
+            raise ValueError('SHA256 mismatch: ' + str(path))
         temporary.replace(path)
-        print(path.name,digest,flush=True)
+        print(path.name, digest, flush=True)
         return digest
-    finally:temporary.unlink(missing_ok=True)
+    finally:
+        if not resume:
+            temporary.unlink(missing_ok=True)
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('url');p.add_argument('path');p.add_argument('--sha256');p.add_argument('--dns-fallback',action='store_true');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('url');p.add_argument('path');p.add_argument('--sha256');p.add_argument('--size',type=int);p.add_argument('--resume',action='store_true');p.add_argument('--dns-fallback',action='store_true');a=p.parse_args()
     if a.dns_fallback:enable_fallback()
-    fetch(a.url,a.path,a.sha256)
+    fetch(a.url,a.path,a.sha256,expected_size=a.size,resume=a.resume)

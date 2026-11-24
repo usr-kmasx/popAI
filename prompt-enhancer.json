@@ -22,9 +22,11 @@
   "runtime": {
     "gpu_layers": 999,
     "context": 4096,
-    "reasoning": "off",
+    "reasoning": "on",
     "port": 8081,
     "threads": 4,
-    "load_policy": "per_request"
+    "load_policy": "per_request",
+    "reasoning_budget": 192,
+    "reasoning_format": "deepseek"
   }
 }

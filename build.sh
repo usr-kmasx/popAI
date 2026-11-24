@@ -31,6 +31,10 @@ if [[ -x "$upscaler/upscayl-bin" && ( ! -x "$upscaler/upscayl-chain" ||
       "$ROOT/patches/upscayl-two-pass.patch" -nt "$upscaler/upscayl-chain" ||
       "$ROOT/patches/upscayl-final-png.patch" -nt "$upscaler/upscayl-chain" ) ]]; then
   if ! "$ROOT/tools/build-upscayl.sh"; then
+    if [[ "${POPAI_STRICT_INSTALL:-0}" == 1 ]]; then
+      echo 'Falha ao compilar o ampliador completo. Instalação interrompida.' >&2
+      exit 1
+    fi
     echo 'A compilação da variante de duas passagens falhou. O executor original continua disponível.' >&2
   fi
 fi

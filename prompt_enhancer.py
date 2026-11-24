@@ -16,6 +16,7 @@ from resident import terminate
 
 MAX_PROMPT_CHARS = 16000
 CONTEXT_SIZE = 4096
+REASONING_BUDGET = 192
 ENHANCER_MODES = {
     'simple': ('prompt-enhancer-system.txt', .4, ''),
     'detailed': ('prompt-enhancer-detailed.txt', .2,
@@ -32,7 +33,8 @@ class PromptEnhancer:
         self.logs=Path(logs)
         self.port=port
         self.binary=self.root/'backends/llama-vulkan/llama-server'
-        self.model=self.root/'models/prompt-enhancer/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive-Q8_0.gguf'
+        model_config=json.loads((self.root/'prompt-enhancer.json').read_text(encoding='utf-8'))['model']
+        self.model=self.root/model_config['directory']/model_config['filename']
         self.systems = {
             mode: (RESOURCE_ROOT / filename).read_text(encoding='utf-8')
             for mode, (filename, _, _) in ENHANCER_MODES.items()
@@ -80,7 +82,9 @@ class PromptEnhancer:
                 try:listener.bind(('127.0.0.1',self.port))
                 except OSError as exc:raise RuntimeError(f'Prompt enhancer port {self.port} is already in use.') from exc
             command=[str(self.binary),'-m',str(self.model),'-ngl','999','--device','Vulkan0',
-                     '-c',str(CONTEXT_SIZE),'--parallel','1','--reasoning','off','--no-context-shift',
+                     '-c',str(CONTEXT_SIZE),'--parallel','1',
+                     '--reasoning','on','--reasoning-budget',str(REASONING_BUDGET),
+                     '--reasoning-format','deepseek','--no-context-shift',
                      '--host','127.0.0.1','--port',str(self.port),'--threads',str(min(4,os.cpu_count() or 1))]
             self.logs.mkdir(parents=True,exist_ok=True)
             env=dict(os.environ,LLAMA_API_KEY=self.token)
@@ -132,7 +136,7 @@ class PromptEnhancer:
             raise ValueError('Enter a valid description before enhancing the prompt.')
         if not isinstance(editing,bool):raise ValueError('Invalid request type.')
         if not isinstance(mode, str) or mode not in ENHANCER_MODES:
-            raise ValueError('Choose Simple, More details, Creative, or Cinematic Art.')
+            raise ValueError('Choose Simple, More details, Creative, or Dramatic.')
         if not self.request_lock.acquire(blocking=False):raise RuntimeError('A prompt is already being enhanced.')
         try:
             with self.lock:

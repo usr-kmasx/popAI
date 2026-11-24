@@ -26,9 +26,10 @@ def main():
     config=json.loads((ROOT/'prompt-enhancer.json').read_text())
     model=config['model'];folder=ROOT/model['directory'];folder.mkdir(parents=True,exist_ok=True)
     target=folder/model['filename']
-    if not verified(target,model['sha256']):fetch(model['url'],target,model['sha256'])
+    if not verified(target,model['sha256']):fetch(model['url'],target,model['sha256'],expected_size=model['size'],resume=True)
     if target.stat().st_size!=model['size']:raise ValueError('Tamanho incorreto do modelo.')
-    with urlopen(model['license_url'],timeout=30) as response:(folder/model.get('license_filename', 'LICENSE')).write_bytes(response.read())
+    if model.get('license_url'):
+        with urlopen(model['license_url'],timeout=30) as response:(folder/model.get('license_filename', 'LICENSE')).write_bytes(response.read())
     backend=config['backend'];destination=ROOT/backend['directory']
     cmake=ROOT/'tools/cmake-4.5.0-linux-x86_64/bin/cmake'
     if not cmake.is_file():raise RuntimeError('CMake local ausente. Prepare as ferramentas de compilação do projeto.')

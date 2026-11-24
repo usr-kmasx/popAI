@@ -30,11 +30,28 @@ nos dados persistidos**, para não invalidar seleções e jobs anteriores.
 
 ## Preset e execução
 
-O preset visual é **Turbo · 8 steps**: Euler, CFG 1, scheduler `simple`.
-O `sd-cli` carrega o modelo por geração e recebe a Turbo LoRA pelo nome
-`<lora:chatrlabs-omni-turbo-8step-fp32:1>`. A interface expõe o Qwen junto
-aos outros três modelos, em cartão com variantes expansíveis. O usuário
-pode alterar amostragem e ativar Custom sem modificar arquivos de peso.
+A seleção contém **Original · 8 steps** e **Fast · 4 steps**.
+Ambos usam os mesmos arquivos e Turbo LoRA, Euler, CFG 1 e scheduler
+`simple`; apenas `--steps` muda. Em uma comparação controlada de uma
+mesma cena (seed `20261122`, 768 × 448), os tempos totais medidos foram
+aproximadamente **120 s e 80 s**, respectivamente. Isso é um resultado
+específico, não uma garantia de qualidade nem de velocidade.
+O **motor residente `sd-server`**, já utilizado pelos outros modelos do popAI,
+agora também é o padrão para o Qwen. Após uma geração, os pesos permanecem
+carregados para as próximas solicitações enquanto o aplicativo estiver aberto e
+as configurações de carregamento não mudarem. As duas variantes reutilizam o
+mesmo processo; só as opções de amostragem da requisição são alteradas.
+
+No `sd-server`, a Turbo LoRA é passada pelo campo estruturado `lora` da API;
+o diretório é enviado via `--lora-model-dir`. Diferentemente do `sd-cli`, o
+servidor não interpreta tags `<lora:...>` inseridas no prompt. O popAI mantém
+o caminho `sd-cli` para execuções com persistência desativada. As configurações
+de GPU Vulkan, uso de RAM, distribuição automática dos pesos, `mmap`, VAE tiling,
+sampler, scheduler e CFG continuam sendo respeitadas.
+
+A interface expõe o Qwen junto aos outros dois modelos, em cartão com variantes
+expansíveis. O usuário pode alterar amostragem e ativar Custom sem modificar
+arquivos de peso.
 
 ## Edição por referência
 
@@ -45,10 +62,16 @@ cria **cópias temporárias** das entradas, reduzindo o maior eixo a no máximo
 proporção. Os PNGs originais enviados pelo usuário não são sobrescritos.
 
 As dimensões internas do resultado também podem ser alinhadas a múltiplos
-de 32; o excedente é recortado antes da ampliação. No hardware com pouca
-VRAM, o caminho de referência utiliza CPU para o encoder de texto/visão e
-VAE e Vulkan para difusão. O restante do pipeline de ampliação permanece
-igual ao de outros modelos; **não há ampliação adaptativa**.
+de 32; o excedente é recortado antes da ampliação. Com ou sem imagens de
+referência, a difusão, o encoder de texto/visão e o VAE usam o backend Vulkan
+selecionado. A distribuição dos pesos entre RAM e VRAM continua obedecendo
+às mesmas opções gerais dos demais modelos (`--auto-fit` ou
+`--offload-to-cpu`), sem limite extra ou política especial para o Qwen.
+Ao alternar entre geração por texto e edição, o motor residente reinicializa
+o contexto quando necessário para carregar o projetor visual; gerações
+seguintes com a mesma configuração reutilizam o processo. O restante do
+pipeline de ampliação permanece igual ao de outros modelos; **não há
+ampliação adaptativa**.
 
 ## Compatibilidade e limites
 

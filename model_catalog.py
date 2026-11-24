@@ -123,8 +123,6 @@ def identify(data):
         return 'encoder', 'qwen3vl-8b'
     if arch == 'clip' and meta.get('clip.projector_type') == 'qwen3vl_merger' and t.get('v.patch_embd.weight') == (16,16,3,1152):
         return 'vision', 'qwen3vl-8b'
-    if any(name.endswith('emb_in.image.weight') for name in t) and any(name.endswith('txt_mode_blocks.0.q_proj.weight') for name in t):
-        return 'diffusion', 'flux3-klein'
     if t.get('img_in.weight') == (128,3072) and 'double_blocks.0.img_attn.qkv.weight' in t:
         return 'diffusion', 'klein'
     if arch == 'qwen_image21' and t.get('img_in.weight') == (64,4096) and 'txt_in.text_norm.weight' in t:
@@ -165,7 +163,7 @@ def diffusion_profile(path, data=None):
         return 'qwen-turbo' if 'turbo' in Path(path).name.lower() else 'qwen'
     if family == 'qwen_image21':
         return 'qwen-image21-experimental'
-    return family if family in ('klein','z-image-turbo','flux3-klein') else 'auto'
+    return family if family in ('klein','z-image-turbo') else 'auto'
 
 
 def validate(profile, paths):

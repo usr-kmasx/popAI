@@ -52,7 +52,9 @@ class PromptEnhancerModeTests(unittest.TestCase):
         for mode in ENHANCER_MODES:
             self.assertIn(f'data-mode="{mode}"', menu)
         self.assertIn('cinematic', self.enhancer.systems)
-        self.assertIn('semi-realistic anime illustration', self.enhancer.systems['cinematic'])
+        self.assertIn('DRAMATIC CHARACTER WALLPAPER', self.enhancer.systems['cinematic'])
+        self.assertIn('premium dark anime wallpaper style', self.enhancer.systems['cinematic'])
+        self.assertIn('Dramatic</button>', menu)
 
     def test_generation_sends_cinematic_system_prompt(self):
         events = self.run_prompt('A white-haired girl looking at the sky')
@@ -66,6 +68,25 @@ class PromptEnhancerModeTests(unittest.TestCase):
         self.assertEqual(body['messages'][1]['content'],
                          'Rewrite this image description as an English prompt:\n\nA white-haired girl looking at the sky')
         self.assertEqual(body['temperature'], 0.3)
+
+    def test_thinking_tokens_remain_hidden_in_all_modes(self):
+        class ThoughtResponse(FakeResponse):
+            def __iter__(self):
+                yield b'data: {"choices":[{"delta":{"reasoning_content":"private analysis"}}]}\n'
+                yield b'data: {"choices":[{"delta":{"content":"Final visible prompt."},"finish_reason":"stop"}]}\n'
+                yield b'data: [DONE]\n'
+
+        class ThoughtConnection(FakeConnection):
+            def getresponse(self):
+                return ThoughtResponse()
+
+        with patch.object(self.enhancer, 'status', return_value={'state': 'ready'}):
+            with patch('prompt_enhancer.http.client.HTTPConnection', ThoughtConnection):
+                for mode in ENHANCER_MODES:
+                    events = list(self.enhancer.stream('A person beside a car.', mode=mode))
+                    self.assertEqual([event['text'] for event in events if 'text' in event],
+                                     ['Final visible prompt.'])
+                    self.assertEqual(events[-1]['state'], 'done')
 
     def test_reference_edit_preserves_edit_scope(self):
         self.run_prompt('Change only the background to blue', editing=True)
@@ -162,11 +183,14 @@ class PromptEnhancerModeTests(unittest.TestCase):
         self.assertEqual(settings['backend']['gpu_backend'], 'vulkan')
         self.assertEqual(settings['runtime']['load_policy'], 'per_request')
         self.assertEqual(settings['runtime']['gpu_layers'], 999)
+        self.assertEqual(settings['runtime']['reasoning'], 'on')
+        self.assertEqual(settings['runtime']['reasoning_budget'], 192)
+        self.assertEqual(settings['runtime']['reasoning_format'], 'deepseek')
         self.assertEqual(self.enhancer.binary.name, 'llama-server')
         self.assertEqual(self.enhancer.binary.parent.name, 'llama-vulkan')
 
     def test_unknown_mode_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, 'Cinematic Art'):
+        with self.assertRaisesRegex(ValueError, 'Dramatic'):
             list(self.enhancer.stream('image', mode='unknown'))
 
 

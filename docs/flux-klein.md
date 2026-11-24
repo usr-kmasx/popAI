@@ -19,8 +19,9 @@ na biblioteca. A localização exata é configurável e não é necessária ao p
   não é usado nesta família.
 - VAE: `flux2-vae.safetensors`, Comfy-Org/Flux-2-Klein-4B.
 
-Total aproximado: 5,44 GB. Versões, tamanhos e SHA-256 publicados são registrados
-em `sources.json` depois de verificar cada download. Arquivos incompletos usam
+Total aproximado: 5,44 GB nesta comparação histórica. Para os componentes
+atualmente disponíveis, revisões, tamanhos e SHA-256 ficam em
+`model-downloads.json`. Arquivos incompletos usam
 sufixo `.part`; só são finalizados quando tamanho e hash correspondem.
 
 Euler, 4 passos, CFG 1, scheduler `flux2`. Removidos os sigmas específicos de

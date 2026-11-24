@@ -29,8 +29,7 @@ def image_geometry(resolution, aspect_ratio='16:9', generation_size='standard'):
 PROFILES = {
  'klein': {'label':'FLUX.2 Klein 4B','steps':'4','cfg':'1','schedule':['--scheduler','flux2'], 'family':'klein','references':True},
  'z-image-turbo': {'label':'Z-Image Turbo','steps':'9','cfg':'1','schedule':[], 'family':'z-image-turbo','references':False},
- 'flux3-klein': {'label':'FLUX 3 Image Klein','steps':'16','cfg':'1','schedule':['--scheduler','discrete'], 'family':'flux3-klein','references':True, 'components':{'encoder':'qwen3vl-4b','vae':'klein'}},
- 'qwen-image21-experimental': {'label':'Qwen Image 2.1 · ChatR Labs Turbo', 'steps':'8','cfg':'1', 'schedule':['--scheduler','simple'], 'family':'qwen_image21', 'references':True, 'cli_only':True, 'lora':'chatrlabs-omni-turbo-8step-fp32.safetensors', 'components':{'diffusion':'qwen_image21','encoder':'qwen3vl-8b','vae':'qwen','vision':'qwen3vl-8b'}},
+ 'qwen-image21-experimental': {'label':'Qwen Image 2.1 · ChatR Labs Turbo', 'steps':'8','cfg':'1', 'schedule':['--scheduler','simple'], 'family':'qwen_image21', 'references':True, 'lora':'chatrlabs-omni-turbo-8step-fp32.safetensors', 'components':{'diffusion':'qwen_image21','encoder':'qwen3vl-8b','vae':'qwen','vision':'qwen3vl-8b'}},
 }
 SD_DEFAULT = {'steps':9, 'cfg':1.0, 'sampler':'euler', 'scheduler':'auto',
               'vae_tiling':True, 'vae_tile_size':0, 'mmap':True}
@@ -39,41 +38,28 @@ Z_IMAGE_PRESET_SIGMAS = {
     'z-image-4': (1.0, 0.9001200199127197, 0.62, 0.22, 0.0),
     'z-image-5': (1.0, 0.9001200199127197, 0.7503749132156372, 0.5009990334510803, 0.22, 0.0),
 }
-# Selected points of the native 16-step discrete schedule, followed by zero.
-FLUX3_PRESET_SIGMAS = {
-    # 1, 3, 7, 11, 16
-    'flux3-klein-5': (1.0, 0.979802072, 0.920318604, 0.806126416, 0.316005468, 0.0),
-    # 1, 3, 7, 11, 13, 14, 15, 16
-    'flux3-klein-8': (1.0, 0.979802072, 0.920318604, 0.806126416, 0.697885156,
-                      0.615270734, 0.497487426, 0.316005468, 0.0),
-}
 SD_DEFAULTS = {
     'default': dict(SD_DEFAULT),
     **{key: {**SD_DEFAULT, 'steps': len(sigmas) - 1} for key, sigmas in Z_IMAGE_PRESET_SIGMAS.items()},
     'klein': {**SD_DEFAULT, 'steps': 4, 'scheduler': 'flux2'},
     'klein-3': {**SD_DEFAULT, 'steps': 3, 'scheduler': 'flux2'},
-    'klein-2': {**SD_DEFAULT, 'steps': 2, 'scheduler': 'flux2'},
-    'flux3-klein': {**SD_DEFAULT, 'steps': 16, 'scheduler': 'discrete'},
     'qwen-image21-experimental': {**SD_DEFAULT, 'steps': 8, 'cfg': 1.0, 'scheduler': 'simple'},
-    **{key: {**SD_DEFAULT, 'steps': len(sigmas) - 1, 'scheduler': 'discrete'}
-       for key, sigmas in FLUX3_PRESET_SIGMAS.items()},
+    # Deliberately only reduce the denoising count; all other parameters,
+    # including the ChatR Labs Turbo LoRA and scheduler, match the 8-step base.
+    'qwen-image21-4': {**SD_DEFAULT, 'steps': 4, 'cfg': 1.0, 'scheduler': 'simple'},
 }
 SD_PROFILE_FAMILIES = {
     'default': 'z-image-turbo',
     **dict.fromkeys(Z_IMAGE_PRESET_SIGMAS, 'z-image-turbo'),
     'klein': 'klein',
     'klein-3': 'klein',
-    'klein-2': 'klein',
-    'flux3-klein': 'flux3-klein',
     'qwen-image21-experimental': 'qwen-image21-experimental',
-    **dict.fromkeys(FLUX3_PRESET_SIGMAS, 'flux3-klein'),
+    'qwen-image21-4': 'qwen-image21-experimental',
 }
 MODEL_DEFAULTS = {'z-image-turbo':{'diffusion':'z_image_turbo-Q8_0.gguf','encoder':'Qwen3-4B-Instruct-2507-Q4_K_M.gguf','vae':'ae.safetensors'}, 'klein':{'diffusion':'flux-2-klein-4b-Q8_0.gguf','encoder':'Qwen3-4B-Q4_K_M.gguf','vae':'flux2-vae.safetensors'}}
 CUSTOM_DEFAULTS = {'z-image-turbo':dict(SD_DEFAULT), 'klein':dict(SD_DEFAULTS['klein'])}
-MODEL_DEFAULTS['flux3-klein'] = {'diffusion':'flux3-image-klein-Q8_0.gguf','encoder':'Qwen3VL-4B-Instruct-Q4_K_M.gguf','vae':'flux2-vae.safetensors'}
-CUSTOM_DEFAULTS['flux3-klein'] = dict(SD_DEFAULTS['flux3-klein'])
 
-# All four models are first-class popAI profiles. Keep the original internal
+# All three models are first-class popAI profiles. Keep the original internal
 # Qwen profile key to preserve saved settings and existing jobs without migration.
 MODEL_DEFAULTS['qwen-image21-experimental'] = {
     'diffusion':'qwen-image-2.1-step90000-Q8_0.gguf',
@@ -133,10 +119,6 @@ def generation_profile(settings, family="z-image-turbo", *, sd_profile=None, bas
         if sd_profile == 'klein-3':
             third, fourth = _klein_last_two_sigmas(*base_size)
             sigmas = (1.0, third, fourth, 0.0)
-        elif sd_profile == 'klein-2':
-            sigmas = (1.0, 0.87, 0.0)
-    elif family == 'flux3-klein':
-        sigmas = FLUX3_PRESET_SIGMAS.get(sd_profile)
     if sigmas is not None:
         result['schedule'] = ['--sigmas', ','.join(map(str, sigmas))]
     return result

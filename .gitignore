@@ -12,6 +12,7 @@ references/
 jobs/
 model-settings.json
 model-settings.*-backup.json
+prompt-enhancer.*-backup.json
 model-settings.tmp
 model-library.json
 logs/

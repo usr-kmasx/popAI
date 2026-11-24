@@ -11,7 +11,7 @@
 </head>
 <body>
   <main class="stage" aria-label="Wallpaper creator">
-    <div id="image-viewport" tabindex="0" aria-label="Image preview"><img id="wallpaper" alt="Generated wallpaper" draggable="false" hidden><div id="generation-preview" aria-hidden="true" hidden></div></div>
+    <div id="image-viewport" tabindex="-1" aria-label="Image preview"><img id="wallpaper" alt="Generated wallpaper" draggable="false" hidden><div id="generation-preview" aria-hidden="true" hidden></div></div>
     <div class="topline"><div class="brand-cluster"><img id="mascot" src="/mascot.svg" width="64" height="64" alt="" aria-hidden="true"><span class="brand">pop<span>AI</span></span></div><a id="save" hidden download aria-label="Download image" title="Download image"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><g class="download-arrow"><path d="M12 3v12m-5-5 5 5 5-5"/></g><path d="M5 18v3h14v-3"/></svg></a></div>
     <div id="welcome" class="welcome"><h1>One idea. One image.</h1><p>Describe the image you have in mind.</p></div>
     <div class="composer">
@@ -31,7 +31,7 @@
               <button type="button" data-mode="simple">Simple</button>
               <button type="button" data-mode="detailed">More details</button>
               <button type="button" data-mode="creative">Creative</button>
-              <button type="button" data-mode="cinematic">Cinematic Art</button>
+              <button type="button" data-mode="cinematic">Dramatic</button>
               <button id="undo-enhance" type="button" hidden>Undo</button>
             </div>
           </div>
@@ -90,7 +90,7 @@
     <section id="panel-sd" role="tabpanel" aria-labelledby="tab-sd" hidden>
       <div class="profile-selector" aria-labelledby="profile-selector-label">
         <div class="profile-selector-heading"><span id="profile-selector-label">Generation profile</span><small>Select a model and its generation preset</small></div>
-        <select id="model-profile" hidden aria-label="Generation profile"><option value="default">Z-Image Turbo · 9 steps (default)</option><option value="z-image-5">Z-Image Turbo · 5 steps</option><option value="z-image-4">Z-Image Turbo · 4 steps</option><option value="klein">FLUX.2 Klein 4B · 4 steps (default)</option><option value="klein-3">FLUX.2 Klein 4B · 3 steps</option><option value="klein-2">FLUX.2 Klein 4B · 2 steps</option><option value="flux3-klein">FLUX 3 Image Klein · 16 steps (default)</option><option value="flux3-klein-8">FLUX 3 Image Klein · 8 steps</option><option value="flux3-klein-5">FLUX 3 Image Klein · 5 steps</option><option value="qwen-image21-experimental">Qwen Image 2.1 · ChatR Labs Turbo · 8 steps</option><option value="custom">Custom</option></select>
+        <select id="model-profile" hidden aria-label="Generation profile"><option value="default">Z-Image Turbo · 9 steps (default)</option><option value="z-image-5">Z-Image Turbo · 5 steps</option><option value="z-image-4">Z-Image Turbo · 4 steps</option><option value="klein">FLUX.2 Klein 4B · 4 steps (default)</option><option value="klein-3">FLUX.2 Klein 4B · 3 steps</option><option value="qwen-image21-experimental">Qwen Image 2.1 · 8 steps (default)</option><option value="qwen-image21-4">Qwen Image 2.1 · Fast · 4 steps</option><option value="custom">Custom</option></select>
         <div id="profile-list" class="profile-list" role="group" aria-labelledby="profile-selector-label">
           <div class="profile-card" data-family="z-image-turbo">
             <button type="button" class="profile-card-toggle" aria-expanded="false" aria-controls="profile-variants-z">
@@ -111,18 +111,6 @@
             <div id="profile-variants-klein" class="profile-variants" hidden>
               <label class="profile-preset" data-profile="klein"><input type="radio" name="generation-preset" value="klein"><span>Original · 4 steps</span><small>Default</small></label>
               <label class="profile-preset" data-profile="klein-3"><input type="radio" name="generation-preset" value="klein-3"><span>Fast · 3 steps</span></label>
-              <label class="profile-preset" data-profile="klein-2"><input type="radio" name="generation-preset" value="klein-2"><span>Faster · 2 steps</span></label>
-            </div>
-          </div>
-          <div class="profile-card" data-family="flux3-klein">
-            <button type="button" class="profile-card-toggle" aria-expanded="false" aria-controls="profile-variants-flux3">
-              <span class="profile-avatar" aria-hidden="true">F3</span><span class="profile-card-copy"><span class="profile-name">FLUX 3 Image Klein<span class="profile-current-marker" hidden></span></span><span class="profile-description">Image generation and reference editing</span></span>
-              <span class="profile-card-steps">16 steps</span><svg class="profile-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
-            </button>
-            <div id="profile-variants-flux3" class="profile-variants" hidden>
-              <label class="profile-preset" data-profile="flux3-klein"><input type="radio" name="generation-preset" value="flux3-klein"><span>Original · 16 steps</span><small>Default</small></label>
-              <label class="profile-preset" data-profile="flux3-klein-8"><input type="radio" name="generation-preset" value="flux3-klein-8"><span>Fast · 8 steps</span></label>
-              <label class="profile-preset" data-profile="flux3-klein-5"><input type="radio" name="generation-preset" value="flux3-klein-5"><span>Faster · 5 steps</span></label>
             </div>
           </div>
           <div class="profile-card" data-family="qwen-image21-experimental">
@@ -131,7 +119,8 @@
               <span class="profile-card-steps">8 steps</span><svg class="profile-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
             </button>
             <div id="profile-variants-qwen" class="profile-variants" hidden>
-              <label class="profile-preset" data-profile="qwen-image21-experimental"><input type="radio" name="generation-preset" value="qwen-image21-experimental"><span>Turbo · 8 steps</span><small>Default</small></label>
+              <label class="profile-preset" data-profile="qwen-image21-experimental"><input type="radio" name="generation-preset" value="qwen-image21-experimental"><span>Original · 8 steps</span><small>Default</small></label>
+              <label class="profile-preset" data-profile="qwen-image21-4"><input type="radio" name="generation-preset" value="qwen-image21-4"><span>Fast · 4 steps</span></label>
             </div>
           </div>
         </div>

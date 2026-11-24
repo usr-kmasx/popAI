@@ -1,5 +1,9 @@
 # Imagem de referência no popAI
 
+> **Situação atual (23/11/2026):** a edição por referência permanece nos
+> modelos FLUX.2 Klein 4B e Qwen Image 2.1. O FLUX 3 Image Klein foi
+> retirado do aplicativo. Os relatos de versões anteriores abaixo são históricos.
+
 > **Registro histórico de 17/11/2026.** Esta seção descreve a primeira
 > implementação com uma única referência. Para o comportamento atual, incluindo
 > múltiplas referências, preview ampliado e editor de desenho, consulte o
