@@ -776,6 +776,9 @@ server.main()
         thread.start()
         base = f'http://127.0.0.1:{server.server_port}'
         try:
+            with urllib.request.urlopen(base + '/eyes.js?v=mascot1') as response:
+                self.assertIn('text/javascript', response.headers['Content-Type'])
+                self.assertIn(b'scheduleBlink', response.read())
             request = urllib.request.Request(base + '/api/reference', data=reference_png(), headers={'Content-Type':'image/png'})
             with urllib.request.urlopen(request) as response:
                 self.assertEqual(response.status, 201)

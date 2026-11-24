@@ -1062,6 +1062,7 @@ def create_server(manager, port=7860):
                     return self.send(400,{'error':str(exc)})
             assets = {'/': ('index.html', 'text/html; charset=utf-8'),
                       '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
+                      '/eyes.js': ('eyes.js', 'text/javascript; charset=utf-8'),
                       '/sketch.html': ('sketch.html', 'text/html; charset=utf-8'),
                       '/sketch.js': ('sketch.js', 'text/javascript; charset=utf-8'),
                       '/sketch.css': ('sketch.css', 'text/css; charset=utf-8'),

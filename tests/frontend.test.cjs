@@ -4,19 +4,22 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 
 function harness(job, dimensions=[1920,1080], decodeFails=false, randomSeed=39, storage=new Map(), localStorage=new Map(), setup=null) {
-  const elements={}, timers=[], calls=[], intervals=[], windowEvents={},frameMessages=[];let now=0;
-  function element() {return {style:{},scrollHeight:58,value:'',disabled:false,hidden:true,children:[],events:{},dataset:{},classList:{add(){},remove(){},toggle(){}},setAttribute(){},removeAttribute(name){delete this[name];},focus(){},click(){},showModal(){this.open=true;},close(){this.open=false;this.events.close?.();},querySelectorAll(){return [];},replaceWith(replacement){for(const key of Object.keys(elements))if(elements[key]===this)elements[key]=replacement;},replaceChildren(...items){this.children=items;},append(...items){this.children.push(...items);},addEventListener(event,handler){this.events[event]=handler;}};}
+  const elements={}, timers=[], holds=new Map(), calls=[], intervals=[], windowEvents={},frameMessages=[];let now=0;
+  function element() {return {style:{setProperty(){},removeProperty(){}},scrollHeight:58,value:'',disabled:false,hidden:true,children:[],events:{},dataset:{},classList:{add(){},remove(){},toggle(){}},setAttribute(){},removeAttribute(name){delete this[name];},focus(){},click(){},getBoundingClientRect(){return {left:0,top:0,width:100,height:50};},showModal(){this.open=true;},close(){this.open=false;this.events.close?.();},querySelector(selector){this._queries ||= {}; return this._queries[selector] ||= element();},querySelectorAll(){return [];},replaceWith(replacement){for(const key of Object.keys(elements))if(elements[key]===this)elements[key]=replacement;},replaceChildren(...items){this.children=items;},append(...items){this.children.push(...items);},addEventListener(event,handler){this.events[event]=handler;}};}
   const query = id => elements[id] ||= element();
+  const popup=query('#thought-popup');
+  const sections=['corrector','enhancer'].map(phase=>Object.assign(element(),{dataset:{phase}}));
+  popup.querySelectorAll=()=>sections;
   query('#sketch-frame').contentWindow = {postMessage(message,origin){frameMessages.push({message,origin});}};
   Object.assign(query('#wallpaper'),{naturalWidth:dimensions[0],naturalHeight:dimensions[1],async decode(){if(decodeFails) throw Error('decode');}});
   if (setup) setup({query,element});
-  const context=vm.createContext({crypto:{getRandomValues(values){values[0]=randomSeed;return values;}},
+  const context=vm.createContext({AbortController,TextDecoder,matchMedia:()=>({matches:true}),crypto:{getRandomValues(values){values[0]=randomSeed;return values;}},
     Option:class {constructor(text,value){this.textContent=text;this.value=value;}},
     document:{addEventListener(){},querySelector:query,createElement:kind=>kind==='canvas'?{getContext:()=>({drawImage(){}}),toBlob:cb=>cb({size:12})}:element()},
-    window:{location:{origin:'http://127.0.0.1:7860'},addEventListener(event,handler){windowEvents[event]=handler;},setTimeout:fn=>timers.push(fn),setInterval:fn=>intervals.push(fn),sessionStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value)},localStorage:{getItem:key=>localStorage.get(key)??null,setItem:(key,value)=>localStorage.set(key,value),removeItem:key=>localStorage.delete(key)}},performance:{now:()=>now},Blob,Image:class {constructor(){Object.assign(this,element(),{naturalWidth:dimensions[0],naturalHeight:dimensions[1]});}async decode(){if(decodeFails)throw Error('decode');}},URL:{createObjectURL:()=> 'blob:ref',revokeObjectURL(){}},
+    window:{location:{origin:'http://127.0.0.1:7860'},addEventListener(event,handler){windowEvents[event]=handler;},setTimeout:(fn,delay)=>{if(delay>=2500){const token=Symbol();holds.set(token,{fn,due:now+delay});return token;}return timers.push(fn);},clearTimeout:token=>holds.delete(token),setInterval:fn=>intervals.push(fn),sessionStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value)},localStorage:{getItem:key=>localStorage.get(key)??null,setItem:(key,value)=>localStorage.set(key,value),removeItem:key=>localStorage.delete(key)}},performance:{now:()=>now},Blob,Image:class {constructor(){Object.assign(this,element(),{naturalWidth:dimensions[0],naturalHeight:dimensions[1]});}async decode(){if(decodeFails)throw Error('decode');}},URL:{createObjectURL:()=> 'blob:ref',revokeObjectURL(){}},
     fetch:async(path,options)=>{calls.push({path,options});return {ok:true,json:async()=>{if(path==='/api/reference'){const letter=['a','b','c','d','e','f'][calls.filter(call=>call.path==='/api/reference').length-1];return {id:letter.repeat(32),image:`/references/${letter.repeat(32)}.png`};}return path.split('?')[0]==='/api/status'?job:{};}};}});
   vm.runInContext(fs.readFileSync('web/app.js','utf8'),context);
-  return {elements,query,timers,calls,intervals,windowEvents,frameMessages,context,advance:ms=>{now+=ms;intervals.forEach(fn=>fn());}};
+  return {elements,query,timers,calls,intervals,windowEvents,frameMessages,context,advance:ms=>{now+=ms;intervals.forEach(fn=>fn());for(const [token,item] of holds){if(item.due<=now){holds.delete(token);item.fn();}}}};
 }
 test('generation profile UI has three expandable model groups and seven approved preset IDs',()=>{
  const html=fs.readFileSync('web/index.html','utf8');
@@ -252,6 +255,108 @@ test('Undo is the last enhancement option and appears only with a restorable pro
  edited.query('#prompt').events.input();
  assert.equal(edited.query('#undo-enhance').hidden,true);
 });
+test('all enhancement modes keep the original input until a complete final prompt and undo restores it',async()=>{
+ const original='um homem com cabelo branco ao lado do carro';
+ for (const mode of ['simple','detailed','creative','cinematic']) {
+   const store=new Map();
+   const h=harness({state:'idle',enhancer:{state:'ready'}},undefined,undefined,undefined,undefined,store);
+   await tick();
+   h.query('#prompt').value=original;
+   h.query('#prompt').events.input();
+   const encode=new TextEncoder();
+   const lines=[
+     {state:'started'},
+     {stage:'corrector'},
+     {phase:'corrector',thought:'Local reasoning'},
+     {phase:'corrector',answer:'Corrected English'},
+     {stage:'enhancer'},
+     {phase:'enhancer',thought:'Local enhancer reasoning'},
+     {phase:'enhancer',answer:'A finished English prompt.'},
+     {text:'A finished '},
+     {text:'English prompt.'},
+     {state:'done',seconds:5.5},
+   ];
+   let i=0;
+   const fetch=h.context.fetch;
+   h.context.fetch=async(path,options)=>{
+     if(path!=='/api/enhance')return fetch(path,options);
+     assert.deepEqual(JSON.parse(options.body),{prompt:original,editing:false,mode});
+     return {ok:true,body:{getReader:()=>({read:async()=>{
+       assert.equal(h.query('#prompt').value,original,'No intermediate input change');
+       const sections=h.query('#thought-popup').querySelectorAll();
+       if(i<=2)assert.equal(h.query('#thought-popup').hidden,true);
+       if(i===3){
+         assert.equal(h.query('#thought-popup').hidden,false);
+         assert.equal(sections[0].querySelector('.thought-text').textContent,'Local reasoning');
+         assert.equal(h.query('#mascot').dataset.corrector,'active');
+         assert.equal(h.query('#mascot').dataset.placement,'center');
+         h.query('#thought-toggle').events.click();
+         assert.equal(h.query('#thought-popup').hidden,true);
+         assert.equal(h.query('#mascot').querySelector('.eye-corrector').disabled,false);
+       }
+       if(i===4)assert.equal(sections[0].querySelector('.thought-answer-text').textContent,'Corrected English');
+       if(i===5){
+         assert.equal(h.query('#mascot').dataset.enhancer,'active');
+         assert.equal(h.query('#mascot').querySelector('.eye-corrector').disabled,true);
+         assert.equal(h.query('#mascot').querySelector('.eye-enhancer').disabled,false);
+         h.query('#mascot').querySelector('.eye-enhancer').events.click();
+         assert.equal(h.query('#thought-popup').hidden,true);
+       }
+       if(i===6)assert.equal(h.query('#thought-popup').hidden,false);
+       if(i===7){
+         assert.equal(sections[1].querySelector('.thought-text').textContent,'Local enhancer reasoning');
+         assert.equal(sections[1].querySelector('.thought-answer-text').textContent,'A finished English prompt.');
+       }
+       if(i===lines.length)return {done:true};
+       return {done:false,value:encode.encode(JSON.stringify(lines[i++])+'\n')};
+     }})}};
+   };
+   await vm.runInContext(`improvePrompt('${mode}')`,h.context);
+   assert.equal(h.query('#prompt').value,'A finished English prompt.');
+   assert.equal(h.query('#thought-popup').hidden,false);
+   h.advance(2999);assert.equal(h.query('#thought-popup').hidden,false);
+   h.advance(1);assert.equal(h.query('#thought-popup').hidden,true);
+   assert.equal(h.query('#mascot').dataset.corrector,'idle');
+   assert.equal(h.query('#mascot').dataset.enhancer,'idle');
+   assert.equal(h.query('#undo-enhance').hidden,false);
+   assert.equal(JSON.parse(store.get('popai.prompt-state')).undo.original,original);
+   h.query('#undo-enhance').events.click();
+   assert.equal(h.query('#prompt').value,original);
+ }
+});
+
+test('failed or canceled enhancement preserves the original input and prior undo',async()=>{
+ for(const failure of ['error','interrupted','cancel']){
+   const original='Previously enhanced text';
+   const store=new Map([['popai.prompt-state',JSON.stringify({version:1,text:original,undo:{original:'Initial raw idea',enhanced:original}})]]);
+   const h=harness({state:'idle',enhancer:{state:'ready'}},undefined,undefined,undefined,undefined,store);
+   await tick();
+   const encode=new TextEncoder();
+   const fetch=h.context.fetch;
+   let i=0;
+   h.context.fetch=async(path,options)=>{
+     if(path!=='/api/enhance')return fetch(path,options);
+     return {ok:true,body:{getReader:()=>({read:async()=>{
+       assert.equal(h.query('#prompt').value,original);
+       if(i++===0)return {done:false,value:encode.encode('{"state":"working"}\n{"text":"Incomplete text"}\n')};
+       if(failure==='error')return {done:false,value:encode.encode('{"error":"Request failed."}\n')};
+       if(failure==='cancel'){
+         h.query('#cancel-enhance').events.click();
+         assert.equal(options.signal.aborted,true);
+         throw Object.assign(new Error('Canceled'),{name:'AbortError'});
+       }
+       return {done:true};
+     }})}};
+   };
+   await vm.runInContext("improvePrompt('simple')",h.context);
+   assert.equal(h.query('#prompt').value,original);
+   assert.equal(JSON.parse(store.get('popai.prompt-state')).undo.original,'Initial raw idea');
+   assert.equal(h.query('#undo-enhance').hidden,false);
+   assert.equal(h.query('#cancel-enhance').hidden,true);
+   if(failure==='cancel')assert.ok(h.calls.some(call=>call.path==='/api/enhance/cancel'));
+ }
+});
+
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 
 async function completedHarness(job,...args) {
@@ -371,4 +476,24 @@ test('generations reuse the page seed and reopening the page draws a new one',as
  await reloaded.query('#form').events.submit({preventDefault(){}});
  const request=reloaded.calls.find(call=>call.path==='/api/generate');
  assert.equal(JSON.parse(request.options.body).seed,42);
+});
+
+test('visible corrector stays for three seconds while enhancer text buffers',async()=>{
+ const h=harness({state:'idle'});await tick();
+ const run=code=>vm.runInContext(code,h.context);
+ run("resetThoughts();setMascotPhase('corrector')");
+ assert.equal(h.query('#thought-popup').hidden,true);
+ run("appendThought('corrector','   ')");assert.equal(h.query('#thought-popup').hidden,true);
+ run("appendAnswer('corrector','Corrected.');setMascotPhase('enhancer');appendThought('enhancer','Reasoning')");
+ assert.equal(run('thoughtDisplayPhase'),'corrector');
+ h.advance(2999);assert.equal(run('thoughtDisplayPhase'),'corrector');
+ h.advance(1);assert.equal(run('thoughtDisplayPhase'),'enhancer');
+ assert.equal(h.query('#thought-popup').hidden,false);
+ run("appendAnswer('enhancer','Final.');finishThoughts(true)");
+ h.advance(2999);assert.equal(h.query('#thought-popup').hidden,false);
+ h.advance(1);assert.equal(h.query('#thought-popup').hidden,true);
+ run("resetThoughts();setMascotPhase('corrector');appendAnswer('corrector','Corrected.');setMascotPhase('enhancer');appendAnswer('enhancer','Final.');finishThoughts(true)");
+ assert.equal(run('thoughtDisplayPhase'),'corrector');
+ h.advance(3000);assert.equal(run('thoughtDisplayPhase'),'enhancer');
+ h.advance(3000);assert.equal(h.query('#thought-popup').hidden,true);
 });

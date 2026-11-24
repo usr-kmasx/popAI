@@ -6,13 +6,21 @@
   <meta name="color-scheme" content="dark">
   <title>popAI</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/style.css">
-  <script src="/app.js" defer></script>
+  <link rel="stylesheet" href="/style.css?v=mascot2">
+  <script src="/app.js?v=mascot2" defer></script>
+  <script src="/eyes.js?v=mascot1" defer></script>
 </head>
 <body>
   <main class="stage" aria-label="Wallpaper creator">
     <div id="image-viewport" tabindex="-1" aria-label="Image preview"><img id="wallpaper" alt="Generated wallpaper" draggable="false" hidden><div id="generation-preview" aria-hidden="true" hidden></div></div>
-    <div class="topline"><div class="brand-cluster"><img id="mascot" src="/mascot.svg" width="64" height="64" alt="" aria-hidden="true"><span class="brand">pop<span>AI</span></span></div><a id="save" hidden download aria-label="Download image" title="Download image"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><g class="download-arrow"><path d="M12 3v12m-5-5 5 5 5-5"/></g><path d="M5 18v3h14v-3"/></svg></a></div>
+    <div class="topline"><div class="brand-cluster"><span class="brand">pop<span>AI</span></span><div id="mascot" data-placement="center" data-corrector="idle" data-enhancer="idle"><button type="button" class="eye eye-corrector" aria-label="Open Corrector processing" aria-controls="thought-popup" aria-expanded="false" disabled><i class="pupil"></i><span class="corrector-line"></span></button><button type="button" class="eye eye-enhancer" aria-label="Open Enhancer processing" aria-controls="thought-popup" aria-expanded="false" disabled><i class="pupil"></i><svg class="enhancer-waves" viewBox="0 0 48 28" preserveAspectRatio="none" aria-hidden="true"><g class="wave-track" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M0 14 C6 4 12 4 18 14 S30 24 36 14 S48 4 54 14 S66 24 72 14 S84 4 90 14 S102 24 108 14"/><path d="M0 14 C6 24 12 24 18 14 S30 4 36 14 S48 24 54 14 S66 4 72 14 S84 24 90 14 S102 4 108 14"/></g></svg></button></div></div><a id="save" hidden download aria-label="Download image" title="Download image"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><g class="download-arrow"><path d="M12 3v12m-5-5 5 5 5-5"/></g><path d="M5 18v3h14v-3"/></svg></a></div>
+    <aside id="thought-popup" aria-label="Model processing" hidden>
+      <button id="thought-toggle" type="button" aria-label="Minimize processing" aria-expanded="true">−</button>
+      <div id="thought-body">
+        <section class="thought-section" data-phase="corrector"><header>Corrector <span class="thought-state">Waiting</span></header><div class="thought-scroll" tabindex="0"><p class="thought-text"></p><div class="thought-answer" hidden><div class="thought-answer-label">Response</div><p class="thought-answer-text"></p></div></div></section>
+        <section class="thought-section" data-phase="enhancer"><header>Enhancer <span class="thought-state">Waiting</span></header><div class="thought-scroll" tabindex="0"><p class="thought-text"></p><div class="thought-answer" hidden><div class="thought-answer-label">Response</div><p class="thought-answer-text"></p></div></div></section>
+      </div>
+    </aside>
     <div id="welcome" class="welcome"><h1>One idea. One image.</h1><p>Describe the image you have in mind.</p></div>
     <div class="composer">
       <div id="composer-fields">

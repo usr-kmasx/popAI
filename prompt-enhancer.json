@@ -27,6 +27,7 @@
     "threads": 4,
     "load_policy": "per_request",
     "reasoning_budget": 192,
+    "corrector_reasoning_budget": 512,
     "reasoning_format": "deepseek"
   }
 }

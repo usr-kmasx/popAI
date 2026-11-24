@@ -1,6 +1,6 @@
 # popAI
 
-**Current release: V23.11.26** · [Release notes](docs/release-23.11.26.md) · [Previous release](docs/release-22-1.11.26.md)
+**Current release: V24.11.26** · [Release notes](docs/release-24.11.26.md) · [Previous release](docs/release-23.11.26.md)
 
 Generate, edit, and upscale wallpapers locally on Linux. popAI runs image models
 on Vulkan and exports PNGs up to 4K UHD at 16:9. It serves its interface in your
@@ -20,7 +20,10 @@ browser and runs inference on your computer.
   stage when progress data is available.
 - On-demand Vulkan prompt enhancement with **Simple**, **More details**,
   **Creative**, and **Dramatic** modes, plus undo and cancellation. The
-  model is unloaded from GPU memory after each enhancement.
+  model is unloaded from GPU memory after each enhancement. A first-pass corrector
+  interprets and translates the description before the selected enhancer runs.
+- Animated mascot with pointer tracking, idle expressions, blinking, live model
+  output, and progress-dependent motion during image generation.
 - Built-in 4:3 sketch editor for Klein and Qwen reference images: freehand strokes, text,
   rectangles, ellipses, straight lines, and arrows; selection, resizing,
   undo/redo, and re-editing from the reference thumbnail.
@@ -90,12 +93,26 @@ GPU or unavailable upstream download cannot be fixed automatically.
 3. Optionally enhance a description with the magic-wand menu. **Undo** (the
    last option) restores the prior wording when available. The **Dramatic**
    enhancer uses the local Qwen3.5-4B HauhauCS Aggressive Q8_0 with sampling
-   temperature `0.3` and a specific dark semi-realistic anime wallpaper art-direction prompt. Each enhancement sends a
-   separate request without conversation history; improving, undoing, and improving again reuses the
-   original text, not a previous conversation.
+   temperature `0.3` and a specific dark semi-realistic anime wallpaper art-direction prompt.
+   All four modes first run a private corrector (`prompt-corrector.txt`) that
+   interprets the original description, resolves ambiguity without artistic additions,
+   and translates it into en-US while preserving requested literal image text.
+   The selected enhancer then receives only the corrected English paragraph.
+   Both independent completion requests use the same loaded Vulkan model,
+   with a 512-token reasoning budget for the corrector and 192 for the enhancer,
+   without conversation history.
+   The local mascot displays the model-emitted reasoning and answer for each stage
+   in a separate minimizable panel. The panel opens on the first text delta,
+   preserves each completed response for three seconds, and can be minimized into
+   the active eye. Neither replaces the input during processing.
+   The input changes only after both stages succeed; canceling or failing
+   preserves the original, and Undo restores the wording before enhancement.
 4. When the final PNG appears, drag to pan, use the mouse wheel to zoom, or
    double-click to reset the view. Click the download arrow to save the PNG
-   at its full resolution.
+   at its full resolution. The mascot moves from the center to the corner during
+   image generation, settles as measured progress advances, and stays there until
+   New clears the image. On the empty home screen prompt enhancement stays centered;
+   idle eyes follow the pointer, change expression, and blink occasionally.
 
 | Model | Default steps | Faster presets | Reference editing |
 | --- | ---: | --- | --- |
@@ -169,12 +186,13 @@ The backend and browser logic tests run without generating images on the GPU.
 The optional headless Chromium sketch tests and their isolated test-server
 instructions are described in the [21.11.26 release notes](docs/release-21.11.26.md).
 Qwen Image 2.1, grouped presets, model library changes and compatibility
-checks are documented in the [current release notes](docs/release-22-1.11.26.md).
-The Vulkan prompt enhancer introduced in 22.11.26 is unchanged.
+checks are documented in the [22-1.11.26 release notes](docs/release-22-1.11.26.md).
+The two-stage prompt workflow and animated mascot are documented in the
+[24.11.26 release notes](docs/release-24.11.26.md).
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py'
-node --test tests/frontend.test.cjs
+node --test tests/frontend.test.cjs tests/eyes.test.cjs
 ```
 
 ## License

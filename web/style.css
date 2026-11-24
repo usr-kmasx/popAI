@@ -180,3 +180,132 @@ input{width:100%;height:60px;padding:0 54px 0 58px;border:1px solid #ffffff20;bo
 /* Keep Save / Cancel reachable while the expanded profile list scrolls. */
 #model-dialog:has(#panel-sd:not([hidden])) .model-actions{position:sticky;z-index:2;bottom:-16px;margin:18px -16px -16px;padding:15px 16px 16px;border-top:1px solid #ffffff16;background:#222824}
 #model-dialog .profile-card-toggle:focus-visible,#model-dialog .profile-preset input[type=radio]:focus-visible,#model-dialog #profile-custom:focus-visible{outline:2px solid #a0c49d;outline-offset:-2px}
+
+/* Fixed mascot under the brand; only the pupils move. */
+.brand-cluster{position:relative}
+#mascot{position:absolute;z-index:2;left:50%;top:calc(100% + 22px);transform:translateX(-50%);width:112px;height:28px;display:flex;align-items:center;justify-content:center;gap:9px;pointer-events:none;user-select:none;filter:none}
+#mascot .eye{position:relative;display:block;width:51px;height:28px;flex:none;border-radius:5px;background:#fff;overflow:hidden}
+#mascot .pupil{position:absolute;display:block;left:50%;top:50%;width:26px;height:8.5px;border-radius:3.5px;background:#272c29;transform:translate(-50%,-50%);transition:transform 100ms ease-out}
+@media(max-width:640px){#mascot{top:calc(100% + 16px);width:82px;height:20px;gap:6px}#mascot .eye{width:38px;height:20px;border-radius:4px}#mascot .pupil{width:19px;height:6px;border-radius:2.5px}}
+@media(prefers-reduced-motion:reduce){#mascot .pupil{transition:none}}
+
+/* Independent processing states; both active here for visual review. */
+#mascot{--eye-ink:#272c29}
+#mascot .pupil{background:var(--eye-ink)}
+#mascot .corrector-line,#mascot .enhancer-waves{display:none}
+#mascot[data-corrector="active"] .eye-corrector .pupil,
+#mascot[data-enhancer="active"] .eye-enhancer .pupil{visibility:hidden}
+#mascot[data-corrector="active"] .corrector-line{display:block;position:absolute;left:5%;top:50%;width:90%;height:2.6px;border-radius:999px;background:var(--eye-ink);transform:translateY(-50%);animation:corrector-breathe 1.15s ease-in-out infinite}
+#mascot[data-enhancer="active"] .enhancer-waves{display:block;position:absolute;inset:2px 3px;width:calc(100% - 6px);height:calc(100% - 4px);color:var(--eye-ink);overflow:hidden}
+#mascot[data-enhancer="active"] .wave-track{animation:enhancer-flow 1.2s linear infinite}
+@keyframes corrector-breathe{0%,100%{transform:translateY(-50%) scaleX(.83)}50%{transform:translateY(-50%) scaleX(1)}}
+@keyframes enhancer-flow{from{transform:translateX(0)}to{transform:translateX(-36px)}}
+@media(max-width:640px){#mascot[data-corrector="active"] .corrector-line{height:2px}}
+@media(prefers-reduced-motion:reduce){#mascot .corrector-line,#mascot .wave-track{animation:none!important}}
+
+/* Experimental processing popup, independent scroll for each stage. */
+#thought-popup{position:absolute;z-index:4;left:16px;top:126px;width:min(292px,calc(100% - 32px));max-height:calc(100dvh - 245px);overflow:auto;padding:12px;border:1px solid #ffffff16;border-radius:16px;background:#171c19ed;box-shadow:0 10px 28px #0003;animation:thought-in .2s ease-out;scrollbar-width:thin;scrollbar-color:#59625b transparent}
+#thought-popup[hidden],#thought-body[hidden]{display:none}
+.thought-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;font-weight:600;color:#edf0eb;margin-bottom:8px}
+.thought-heading small{font-size:10px;font-weight:400;color:#9aa39c;margin-left:5px}
+#thought-toggle{border:0;background:transparent;color:#b9c2bb;cursor:pointer;padding:0 4px;font-size:20px;line-height:20px}
+.thought-section{padding:9px 0;border-top:1px solid #ffffff12}
+.thought-section:last-child{padding-bottom:0}
+.thought-section header{display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:600;color:#d6ded7;margin-bottom:6px}
+.thought-state{font-size:10px;font-weight:400;color:#909b92}
+.thought-section[data-active="true"] .thought-state{color:#c2d2c2}
+.thought-scroll{max-height:clamp(48px,calc((100dvh - 350px)/2),180px);min-height:44px;overflow:auto;scrollbar-width:thin;scrollbar-color:#57615a transparent}
+.thought-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.55;color:#aeb9b0;margin:0}
+@keyframes thought-in{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:640px){#thought-popup{top:100px;left:12px;width:min(270px,calc(100% - 24px));max-height:calc(100dvh - 222px)}}
+@media(prefers-reduced-motion:reduce){#thought-popup{animation:none}}
+
+/* Only the current processing stage is visible; scrolling stays functional. */
+#thought-popup,#thought-popup .thought-scroll{scrollbar-width:none;-ms-overflow-style:none}
+#thought-popup::-webkit-scrollbar,#thought-popup .thought-scroll::-webkit-scrollbar{display:none}
+#thought-popup .thought-section:not([data-active="true"]){display:none}
+#thought-popup .thought-section{border-top:0;padding:4px 0 0}
+#thought-popup .thought-scroll{max-height:clamp(80px,calc(100dvh - 300px),260px)}
+
+/* The simulated response follows the reasoning in the same scroll area. */
+.thought-answer{margin-top:12px;padding-top:10px;border-top:1px solid #ffffff12}
+.thought-answer[hidden]{display:none}
+.thought-answer-label{font-size:11px;font-weight:600;color:#d6ded7;margin-bottom:5px}
+.thought-answer-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.55;color:#edf0eb;margin:0}
+
+/* Dock the live popup into the eye of the current stage. */
+#mascot .eye{appearance:none;border:0;padding:0;margin:0;cursor:default;opacity:1;box-shadow:none;color:inherit;pointer-events:none}
+#mascot .eye[data-docked="true"]{pointer-events:auto;cursor:pointer;animation:eye-docked 1.8s ease-in-out infinite}
+#mascot .eye[data-docked="true"]:hover{background:#fff;box-shadow:0 0 0 3px #c5d8bd60,0 0 12px #c5d8bd40;animation:none}
+#mascot .eye:focus-visible{outline:2px solid #a0c49d;outline-offset:3px}
+@keyframes eye-docked{0%,100%{box-shadow:0 0 0 0 #c5d8bd00}50%{box-shadow:0 0 0 3px #c5d8bd35}}
+#thought-popup{transform-origin:center;animation:none}
+#thought-popup[data-transitioning="true"]{pointer-events:none}
+@media(prefers-reduced-motion:reduce){#mascot .eye[data-docked="true"]{animation:none}}
+
+/* During docking, the popup travels behind the eyes. */
+.topline{z-index:5}
+#thought-popup[data-transitioning="true"]{z-index:4}
+
+/* Morph the existing pupil into the processing shape, then back to gaze. */
+#mascot .pupil{visibility:visible;opacity:1;transition:width 340ms cubic-bezier(.22,.8,.24,1),height 340ms cubic-bezier(.22,.8,.24,1),border-radius 340ms ease,transform 340ms cubic-bezier(.22,.8,.24,1),opacity 180ms ease 100ms}
+#mascot .corrector-line,#mascot[data-corrector="active"] .corrector-line{display:none}
+#mascot[data-corrector="active"] .eye-corrector .pupil,
+#mascot[data-enhancer="active"] .eye-enhancer .pupil{visibility:visible;width:90%;height:2.6px;border-radius:999px;transform:translate(-50%,-50%)!important}
+#mascot[data-corrector="active"] .eye-corrector .pupil{animation:corrector-morph-pulse 1.15s 340ms ease-in-out infinite}
+@keyframes corrector-morph-pulse{0%,100%{width:90%}50%{width:74.7%}}
+#mascot[data-enhancer="active"] .eye-enhancer .pupil{opacity:0;transition-delay:0ms,0ms,0ms,0ms,110ms}
+#mascot .enhancer-waves{display:block;position:absolute;inset:2px 3px;width:calc(100% - 6px);height:calc(100% - 4px);color:var(--eye-ink);overflow:hidden;opacity:0;pointer-events:none;transition:opacity 180ms ease}
+#mascot .enhancer-waves path{d:path("M0 14 C6 14 12 14 18 14 S30 14 36 14 S48 14 54 14 S66 14 72 14 S84 14 90 14 S102 14 108 14");transition:d 390ms cubic-bezier(.22,.8,.24,1)}
+#mascot[data-enhancer="active"] .enhancer-waves{opacity:1;transition-delay:80ms}
+#mascot[data-enhancer="active"] .enhancer-waves path:first-child{d:path("M0 14 C6 4 12 4 18 14 S30 24 36 14 S48 4 54 14 S66 24 72 14 S84 4 90 14 S102 24 108 14")}
+#mascot[data-enhancer="active"] .enhancer-waves path:last-child{d:path("M0 14 C6 24 12 24 18 14 S30 4 36 14 S48 24 54 14 S66 4 72 14 S84 24 90 14 S102 4 108 14")}
+#mascot .wave-track{animation:enhancer-flow 1.2s linear infinite;animation-play-state:paused}
+#mascot[data-enhancer="active"] .wave-track{animation:enhancer-flow 1.2s linear infinite;animation-play-state:running}
+@media(max-width:640px){#mascot[data-corrector="active"] .eye-corrector .pupil,#mascot[data-enhancer="active"] .eye-enhancer .pupil{height:2px}}
+@media(prefers-reduced-motion:reduce){#mascot .pupil,#mascot .enhancer-waves,#mascot .enhancer-waves path{transition:none!important;animation:none!important}}
+
+/* Compact popup: no separate Processing/Preview heading. */
+#thought-popup #thought-toggle{position:absolute;top:12px;right:10px}
+#thought-popup .thought-section{padding-top:0}
+#thought-popup .thought-section header{min-height:20px;padding-right:24px}
+
+/* Hide the redundant Processing / Responding status label. */
+#thought-popup .thought-state{display:none}
+
+/* Image generation: anxious eyes gradually settle as progress increases. */
+#mascot[data-image-generating="true"] .eye{
+  animation:mascot-nervous 600ms ease-in-out infinite;
+  will-change:transform;
+}
+#mascot[data-image-generating="true"] .eye-enhancer{animation-delay:-243ms}
+@keyframes mascot-nervous{
+  0%,100%{transform:translate(0,0) rotate(0)}
+  12%{transform:translate(calc(var(--shake-distance)*-.72),calc(var(--shake-distance)*.55)) rotate(calc(var(--shake-angle)*-.8))}
+  25%{transform:translate(var(--shake-distance),calc(var(--shake-distance)*-.45)) rotate(var(--shake-angle))}
+  39%{transform:translate(calc(var(--shake-distance)*-.85),calc(var(--shake-distance)*-.6)) rotate(calc(var(--shake-angle)*-.7))}
+  53%{transform:translate(calc(var(--shake-distance)*.62),calc(var(--shake-distance)*.8)) rotate(calc(var(--shake-angle)*.6))}
+  68%{transform:translate(calc(var(--shake-distance)*-.4),calc(var(--shake-distance)*.35)) rotate(calc(var(--shake-angle)*-.9))}
+  83%{transform:translate(calc(var(--shake-distance)*.8),calc(var(--shake-distance)*-.7)) rotate(calc(var(--shake-angle)*.5))}
+}
+@media(prefers-reduced-motion:reduce){#mascot[data-image-generating="true"] .eye{animation:none}}
+
+/* Round attentive iris, with the original horizontal shape at rest.
+   Processing shapes always take priority. */
+#mascot[data-iris="round"]:not([data-corrector="active"]):not([data-enhancer="active"]):not([data-image-generating="true"]) .pupil{width:14px;height:14px;border-radius:50%}
+@media(max-width:640px){#mascot[data-iris="round"]:not([data-corrector="active"]):not([data-enhancer="active"]):not([data-image-generating="true"]) .pupil{width:10px;height:10px}}
+
+/* Large home mascot, compact working/result mascot. Scale the whole group. */
+#mascot{position:fixed;top:var(--corner-y,97px);left:var(--corner-x,74px);transform:translate(-50%,-50%) scale(1);transform-origin:center;transition:left 440ms cubic-bezier(.22,.8,.24,1),top 440ms cubic-bezier(.22,.8,.24,1),transform 440ms cubic-bezier(.22,.8,.24,1)}
+#mascot[data-placement="center"]{left:50%;top:var(--center-y,27vh);transform:translate(-50%,-50%) scale(1.85)}
+@media(max-width:640px){#mascot[data-placement="center"]{transform:translate(-50%,-50%) scale(1.75)}}
+@media(max-height:430px){#mascot[data-placement="center"]{transform:translate(-50%,-50%) scale(1.3)}}
+@media(prefers-reduced-motion:reduce){#mascot{transition:none}}
+
+/* Natural synchronized blink; the eye centers and widths stay fixed. */
+#mascot[data-blink="true"]:not([data-corrector="active"]):not([data-enhancer="active"]):not([data-image-generating="true"]) .eye{animation:mascot-blink 150ms ease-in-out both;transform-origin:center}
+@keyframes mascot-blink{
+  0%,100%{transform:scaleY(1)}
+  38%,48%{transform:scaleY(.07)}
+}
+@media(prefers-reduced-motion:reduce){#mascot[data-blink="true"] .eye{animation:none!important}}

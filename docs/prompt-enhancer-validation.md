@@ -121,3 +121,43 @@ a conclusão e cancelamento. Em um teste local, Cinematic Art levou cerca de
 para 2,05 GB após ele terminar. A suíte registrou 31 testes Python e 13 Node
 aprovados. Consulte as [notas da versão 22.11.26](release-22.11.26.md) para
 a configuração, limitações e manifesto da versão.
+
+## Corretor antes dos quatro modos — V24.11.26
+
+O fluxo de aprimoramento passa a usar duas conclusões independentes no mesmo
+processo Vulkan carregado sob demanda. O arquivo `prompt-corrector.txt`
+especifica interpretação, correção linguística e visual, tradução natural para
+en-US, preservação de detalhes e restrições, sem enriquecimento artístico.
+A correção intermediária alimenta somente o modo de aprimoramento escolhido
+e aparece separadamente na popup do mascote.
+Os dois pedidos usam o mesmo modelo, com orçamento de reasoning de 512 tokens
+para o corretor e 192 para o aprimorador. Não compartilham histórico e não
+carregam os pesos novamente.
+Os prompts e temperaturas dos quatro modos permanecem os mesmos.
+
+O navegador mantém o original até o resultado completo. Os deltas de reasoning
+emitidos pelo modelo local e as respostas de cada etapa são exibidos em uma
+popup separada, sem alterar o input ou persistir os pensamentos. A popup pode
+ser minimizada no olho ativo; a animação acompanha a etapa real. Undo recupera
+o texto original;
+cancelamento, erro, truncamento ou desconexão impedem a publicação de texto
+parcial e encerram o processo de inferência de propriedade do aplicativo.
+
+Os testes simulados verificam roteamento das duas etapas em todos os modos,
+separação de contextos, restrições de edição, cancelamento, erros e restauração
+do input. A qualidade linguística da interpretação depende do modelo local;
+estes testes não constituem uma avaliação de fidelidade artística real.
+
+### Mascote — integração
+
+Os eventos NDJSON stage, phase/thought e phase/answer alimentam a interface;
+text e done continuam reservados ao resultado final validado. A intensidade
+do tremor acompanha o progresso real de amostragem e ampliação, com redução
+monotônica durante decodificação e finalização. O mascote fica no canto enquanto
+há imagem e retorna ao centro após New. A integração não usa dados fictícios.
+
+A popup abre somente ao receber texto do modelo e mantém cada resposta concluída
+visível por três segundos, sem atrasar a inferência. Erros e cancelamentos fecham
+a popup imediatamente. O tremor usa um ciclo de 600 ms, com amplitude decrescente
+conforme o progresso. Os testes de interface verificam também o tempo de leitura,
+a troca de etapa e a minimização.

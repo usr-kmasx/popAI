@@ -1,5 +1,6 @@
 const mascot = document.querySelector('#mascot');
 let mascotState = '';
+let mascotJobId=null,mascotProgress=0;
 let lastActivity = performance.now();
 let completionAudio = null;
 let lastSoundJob = null;
@@ -29,11 +30,40 @@ function playCompletionSound(identity) {
 }
 function updateMascot() {
   const generating = Boolean(clockJob) || enhancing;
+  const imageGenerating=Boolean(clockJob)&&!enhancing&&clockJob.phase!=='cancelling';
+  const imageActive=String(imageGenerating);
+  if(mascot.dataset.imageGenerating!==imageActive)mascot.dataset.imageGenerating=imageActive;
+  const docked=Boolean(clockJob)||Boolean(latestImageId&&latestImageId!==hiddenImageId&&!resultError)||!wallpaper.hidden||!generationPreview.hidden;
+  const placement=docked?'corner':'center';
+  if(mascot.dataset.placement!==placement)mascot.dataset.placement=placement;
+  if(imageGenerating){
+    if(mascotJobId!==clockJob.id){mascotJobId=clockJob.id;mascotProgress=0;}
+    const progress=clockJob.progress||{};
+    const total=Number(progress.total)||1;
+    const measured=Math.max(0,Math.min(1,(Number(progress.completed)||0)/total));
+    let fraction=0;
+    if(clockJob.phase==='finalizing')fraction=.99;
+    else if(clockJob.phase==='upscaling'){
+      const passes=Math.max(1,Number(clockJob.upscale_passes)||1);
+      const pass=Math.min(passes,Math.max(1,Number(clockJob.upscale_pass)||1));
+      fraction=.90+.08*(pass-1+(progress.unit==='percent'?measured:0))/passes;
+    }
+    else if(progress.stage==='vae_decode')fraction=.87;
+    else if(progress.stage==='sampling'&&progress.unit==='steps')fraction=.85*measured;
+    mascotProgress=Math.max(mascotProgress,fraction);
+    fraction=mascotProgress;
+    mascot.style.setProperty('--shake-distance',(0.2+4.3*Math.pow(1-fraction,1.35)).toFixed(3)+'px');
+    mascot.style.setProperty('--shake-angle',(0.15+2.85*Math.pow(1-fraction,1.35)).toFixed(3)+'deg');
+  }else{
+    mascotJobId=null;mascotProgress=0;
+    mascot.style.removeProperty('--shake-distance');
+    mascot.style.removeProperty('--shake-angle');
+  }
   if (mascotState === 'generating' && !generating) lastActivity = performance.now();
   const state = generating ? 'generating' : performance.now()-lastActivity >= 30000 ? 'waiting' : 'idle';
   if (state !== mascotState) {
     mascotState = state;
-    mascot.src = {idle:'/mascot.svg',waiting:'/mascot-waiting.svg',generating:'/mascot-generating.svg'}[state];
+    mascot.dataset.state = state;
   }
 }
 function wakeMascot() { lastActivity = performance.now(); updateMascot(); prepareCompletionSound(); }
@@ -495,16 +525,193 @@ enhanceOptions.addEventListener('click', event => {
   if (option) improvePrompt(option.dataset.mode);
 });
 
+const thoughtPopup=document.querySelector('#thought-popup');
+const thoughtBody=document.querySelector('#thought-body');
+const thoughtToggle=document.querySelector('#thought-toggle');
+const thoughtSections=Object.fromEntries([...thoughtPopup.querySelectorAll('.thought-section')].map(el=>[el.dataset.phase,el]));
+const thoughtEyes={
+  corrector:mascot.querySelector('.eye-corrector'),
+  enhancer:mascot.querySelector('.eye-enhancer')
+};
+let thoughtPhase='idle',thoughtMinimized=false,thoughtAnimation=null;
+let thoughtDisplayPhase='idle',thoughtHoldTimer=null,thoughtHoldUntil=0;
+function clearThoughtHold(){
+  if(thoughtHoldTimer!==null)window.clearTimeout(thoughtHoldTimer);
+  thoughtHoldTimer=null;thoughtHoldUntil=0;
+}
+function hasThoughtContent(phase){
+  const el=thoughtSections[phase];
+  return !!el&&(Boolean((el.querySelector('.thought-text').textContent||'').trim())||
+    Boolean((el.querySelector('.thought-answer-text').textContent||'').trim()));
+}
+function displayThought(phase){
+  thoughtDisplayPhase=phase;
+  for(const [key,el] of Object.entries(thoughtSections))el.dataset.active=String(key===phase);
+  thoughtPopup.hidden=thoughtMinimized||!hasThoughtContent(phase);
+}
+function holdThought(next,delay=3000,after=null){
+  clearThoughtHold();
+  thoughtHoldUntil=performance.now()+delay;
+  thoughtHoldTimer=window.setTimeout(()=>{
+    thoughtHoldTimer=null;thoughtHoldUntil=0;
+    displayThought(next);
+    if(after)after();
+  },delay);
+}
+function revealThought(phase){
+  if(phase===thoughtDisplayPhase&&!thoughtMinimized&&!thoughtAnimation&&hasThoughtContent(phase))thoughtPopup.hidden=false;
+}
+function finishThoughts(success){
+  const previous=thoughtPhase,displayed=thoughtDisplayPhase;
+  const remaining=Math.max(0,thoughtHoldUntil-performance.now());
+  clearThoughtHold();
+  stopThoughtAnimation();
+  setMascotPhase('idle');
+  if(success&&!thoughtMinimized&&hasThoughtContent(previous)){
+    if(displayed!==previous&&hasThoughtContent(displayed)&&remaining>0){
+      displayThought(displayed);
+      holdThought(previous,remaining,()=>holdThought('idle'));
+    }else{
+      displayThought(previous);
+      holdThought('idle');
+    }
+  }else displayThought('idle');
+  thoughtMinimized=false;
+  syncThoughtEyes();
+}
+function stopThoughtAnimation(){
+  const anim=thoughtAnimation;
+  thoughtAnimation=null;
+  if(anim)anim.cancel();
+  delete thoughtPopup.dataset.transitioning;
+}
+function syncThoughtEyes(){
+  for(const [key,eye] of Object.entries(thoughtEyes)){
+    const docked=thoughtMinimized&&thoughtPhase===key;
+    eye.dataset.docked=String(docked);
+    eye.disabled=!docked;
+    eye.setAttribute('aria-expanded',String(thoughtPhase===key&&!thoughtMinimized));
+  }
+}
+function resetThoughts(){
+  clearThoughtHold();
+  stopThoughtAnimation();
+  thoughtMinimized=false;
+  thoughtPhase='idle';thoughtDisplayPhase='idle';
+  thoughtBody.hidden=false;
+  thoughtToggle.textContent='−';
+  thoughtToggle.setAttribute('aria-expanded','true');
+  thoughtToggle.setAttribute('aria-label','Minimize processing');
+  for(const el of Object.values(thoughtSections)){
+    el.querySelector('.thought-text').textContent='';
+    el.querySelector('.thought-answer').hidden=true;
+    el.querySelector('.thought-answer-text').textContent='';
+    el.querySelector('.thought-scroll').scrollTop=0;
+    el.querySelector('.thought-state').textContent='Waiting';
+    el.dataset.active='false';
+  }
+  thoughtPopup.hidden=true;
+  syncThoughtEyes();
+}
+function animateThoughtDock(hide){
+  if(thoughtPhase==='idle'){if(hide){clearThoughtHold();displayThought('idle');}return;}
+  if(thoughtMinimized===hide)return;
+  if(!hide&&!hasThoughtContent(thoughtPhase)){
+    thoughtMinimized=false;displayThought(thoughtPhase);syncThoughtEyes();thoughtToggle.setAttribute('aria-expanded','true');return;
+  }
+  if(hide){clearThoughtHold();thoughtDisplayPhase=thoughtPhase;}
+  else displayThought(thoughtPhase);
+  const eye=thoughtEyes[thoughtPhase];
+  stopThoughtAnimation();
+  thoughtMinimized=hide;
+  thoughtPopup.hidden=false;
+  if(!hide){
+    const scroll=thoughtSections[thoughtPhase].querySelector('.thought-scroll');
+    scroll.scrollTop=scroll.scrollHeight;
+  }
+  const r=thoughtPopup.getBoundingClientRect(),e=eye.getBoundingClientRect();
+  const dx=e.left+e.width/2-r.left-r.width/2,dy=e.top+e.height/2-r.top-r.height/2;
+  const scale=Math.min(e.width/Math.max(1,r.width),e.height/Math.max(1,r.height))*.8;
+  const expanded={transform:'translate(0px,0px) scale(1)',opacity:1};
+  const docked={transform:'translate('+dx+'px,'+dy+'px) scale('+scale+')',opacity:0};
+  syncThoughtEyes();
+  thoughtToggle.setAttribute('aria-expanded',String(!hide));
+  if(matchMedia('(prefers-reduced-motion: reduce)').matches||!thoughtPopup.animate){
+    thoughtPopup.hidden=hide;
+    if(hide)displayThought(thoughtPhase);
+    if(hide)eye.focus({preventScroll:true});else thoughtToggle.focus({preventScroll:true});
+    return;
+  }
+  thoughtPopup.dataset.transitioning='true';
+  const anim=thoughtPopup.animate(hide?[expanded,docked]:[docked,expanded],{duration:280,easing:'cubic-bezier(.22,.8,.24,1)',fill:'both'});
+  thoughtAnimation=anim;
+  anim.finished.then(()=>{
+    if(thoughtAnimation!==anim)return;
+    thoughtPopup.hidden=hide;
+    stopThoughtAnimation();
+    if(hide)displayThought(thoughtPhase);
+    if(hide&&thoughtPhase!=='idle')thoughtEyes[thoughtPhase].focus({preventScroll:true});
+    else if(!hide)thoughtToggle.focus({preventScroll:true});
+  }).catch(()=>{});
+}
+thoughtToggle.addEventListener('click',()=>animateThoughtDock(true));
+for(const [key,eye] of Object.entries(thoughtEyes)){
+  eye.addEventListener('click',()=>{if(thoughtMinimized&&thoughtPhase===key)animateThoughtDock(false);});
+}
+function appendThought(phase,text){
+  const el=thoughtSections[phase];
+  if(!el)return;
+  const scroll=el.querySelector('.thought-scroll');
+  const follow=scroll.scrollHeight-scroll.scrollTop-scroll.clientHeight<24;
+  el.querySelector('.thought-text').textContent+=text;
+  revealThought(phase);
+  if(follow)scroll.scrollTop=scroll.scrollHeight;
+}
+function appendAnswer(phase,text){
+  const el=thoughtSections[phase];
+  if(!el)return;
+  const scroll=el.querySelector('.thought-scroll');
+  const follow=scroll.scrollHeight-scroll.scrollTop-scroll.clientHeight<24;
+  el.querySelector('.thought-answer').hidden=false;
+  el.querySelector('.thought-answer-text').textContent+=text;
+  el.querySelector('.thought-state').textContent='Responding';
+  revealThought(phase);
+  if(follow)scroll.scrollTop=scroll.scrollHeight;
+}
+function setMascotPhase(phase){
+  mascot.dataset.corrector=phase==='corrector'?'active':'idle';
+  mascot.dataset.enhancer=phase==='enhancer'?'active':'idle';
+  for(const [key,el] of Object.entries(thoughtSections)){
+    el.querySelector('.thought-state').textContent=key===phase?'Processing':phase==='enhancer'&&key==='corrector'?'Done':'Waiting';
+  }
+  if(phase!==thoughtPhase){
+    const previous=thoughtPhase;
+    const wasAnimating=Boolean(thoughtAnimation);
+    stopThoughtAnimation();
+    thoughtPhase=phase;
+    if(phase==='idle'){
+      displayThought('idle');
+    }else if(previous!=='idle'&&!thoughtMinimized&&!thoughtPopup.hidden&&hasThoughtContent(thoughtDisplayPhase)){
+      holdThought(phase);
+    }else{
+      clearThoughtHold();
+      displayThought(phase);
+    }
+    if(wasAnimating&&!thoughtMinimized&&!thoughtPopup.hidden)thoughtToggle.focus({preventScroll:true});
+  }
+  syncThoughtEyes();
+}
+
 async function improvePrompt(mode) {
   if (!canImprovePrompt()) return;
   const original=prompt.value;
   const originalUndo=undoPrompt;
   savePromptDraft();
-  let text='',pending='',done=false;
+  let text='',pending='',done=false,seconds=0,success=false;
   undoPrompt=null;undoEnhance.hidden=true;
   promptNotice=null;
   enhancing=true;enhanceController=new AbortController();setBusy();updateMascot();
-  status.textContent='Enhancing prompt…';stage.classList.remove('error');
+  status.textContent='Correcting prompt…';resetThoughts();setMascotPhase('corrector');stage.classList.remove('error');
   try {
     const response=await fetch('/api/enhance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:original,editing:references.length>0,mode}),signal:enhanceController.signal});
     if(!response.ok) {const error=await response.json();throw new Error(error.error || 'Could not enhance the prompt.');}
@@ -514,8 +721,14 @@ async function improvePrompt(mode) {
       if(!line.trim())return;
       const event=JSON.parse(line);
       if(event.error)throw new Error(event.error);
-      if(event.text) {text+=event.text;prompt.value=text;resizePrompt();prompt.scrollTop=prompt.scrollHeight;}
-      if(event.state==='done') {done=true;showPromptNotice(`Prompt enhanced · ${event.seconds.toLocaleString('en-US')}s`);}
+      if(event.stage==='corrector'||event.stage==='enhancer'){
+        setMascotPhase(event.stage);
+        status.textContent=event.stage==='corrector'?'Correcting prompt…':'Enhancing prompt…';
+      }
+      if(event.phase===thoughtPhase&&typeof event.thought==='string')appendThought(event.phase,event.thought);
+      if(event.phase===thoughtPhase&&typeof event.answer==='string')appendAnswer(event.phase,event.answer);
+      if(event.text) text+=event.text;
+      if(event.state==='done') {done=true;seconds=event.seconds;}
     }
     while(true) {
       const chunk=await reader.read();
@@ -524,12 +737,13 @@ async function improvePrompt(mode) {
       const lines=pending.split('\n');pending=lines.pop();lines.forEach(receive);
     }
     if(!done || !text.trim())throw new Error('Prompt enhancement was interrupted. The original text was restored.');
-    prompt.value=text.trim();undoPrompt=original;
+    prompt.value=text.trim();undoPrompt=original;success=true;
+    showPromptNotice(`Prompt enhanced · ${seconds.toLocaleString('en-US')}s`);
   } catch(error) {
     enhanceController.abort();prompt.value=original;undoPrompt=originalUndo;
     showPromptNotice(error.name==='AbortError'?'Enhancement canceled · Original text restored':error.message);
   } finally {
-    enhancing=false;enhanceController=null;savePromptDraft();resizePrompt();setBusy();updateMascot();prompt.focus();
+    finishThoughts(success);enhancing=false;enhanceController=null;savePromptDraft();resizePrompt();setBusy();updateMascot();prompt.focus();
   }
 }
 cancelEnhance.addEventListener('click',()=>{
@@ -1155,6 +1369,7 @@ function clearResult() {
 
 newGeneration.addEventListener('click', () => {
   if (newGeneration.disabled) return;
+  clearThoughtHold();displayThought('idle');
   const nextSeed = randomSeed();
   pageSeed = nextSeed === pageSeed ? (pageSeed + 1) & 0x7fffffff : nextSeed;
   hiddenImageId = latestImageId || shown || hiddenImageId;
@@ -1163,6 +1378,7 @@ newGeneration.addEventListener('click', () => {
   resultError = null;
   stage.classList.remove('error');
   welcome.hidden = false;
+  updateMascot();
   saveComposerSession();
   showPromptNotice('Ready for a new generation. Press Enter to generate.');
   prompt.focus();
@@ -1192,6 +1408,7 @@ async function showResult(job, announce = true) {
   imageViewSize=null;
   resizeImageView();
   welcome.hidden = true;
+  updateMascot();
   save.href = job.image;
   save.download = imageDownloadName(job.id);
   save.setAttribute('aria-label',`Download image, ${width} by ${height} pixels`);
@@ -1345,6 +1562,7 @@ form.addEventListener('submit', async event => {
   clearGenerationPreview();
   setBusy(true);
   stage.classList.remove('error');
+  clearThoughtHold();displayThought('idle');
   status.textContent = 'Starting…';
   try {
     await request('/api/generate', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({prompt: prompt.value.trim(), seed: pageSeed, reference: references.map(reference => reference.id)})});

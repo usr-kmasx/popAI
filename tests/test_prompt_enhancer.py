@@ -5,27 +5,53 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from prompt_enhancer import ENHANCER_MODES, PromptEnhancer
+from prompt_enhancer import CORRECTOR_TEMPERATURE, ENHANCER_MODES, PromptEnhancer
 
 
 class FakeResponse:
     status = 200
 
+    def __init__(self, text='A cinematic illustration.', *, finish='stop', done=True,
+                 reasoning=None):
+        self.text = text
+        self.finish = finish
+        self.done = done
+        self.reasoning = reasoning
+
     def __iter__(self):
-        yield b'data: {"choices":[{"delta":{"content":"A cinematic illustration."},"finish_reason":"stop"}]}\n'
-        yield b'data: [DONE]\n'
+        if self.reasoning:
+            yield self.event({'reasoning_content': self.reasoning})
+        if self.text:
+            for part in (self.text[:len(self.text)//2], self.text[len(self.text)//2:]):
+                yield self.event({'content': part})
+        yield self.event({}, self.finish)
+        if self.done:
+            yield b'data: [DONE]\n'
+
+    @staticmethod
+    def event(delta, finish=None):
+        data = {'choices': [{'delta': delta, 'finish_reason': finish}]}
+        return ('data: ' + json.dumps(data) + '\n').encode()
 
 
 class FakeConnection:
     requests = []
+    responses = []
+    corrected = 'A corrected English description.'
 
     def __init__(self, *args, **kwargs):
         self.sock = None
 
     def request(self, method, path, body, headers):
-        self.requests.append((method, path, json.loads(body), headers))
+        self.body = json.loads(body)
+        self.requests.append((method, path, self.body, headers))
 
     def getresponse(self):
+        if self.responses:
+            return self.responses.pop(0)
+        system = self.body['messages'][0]['content']
+        if 'private prompt corrector' in system:
+            return FakeResponse(self.corrected)
         return FakeResponse()
 
     def close(self):
@@ -37,14 +63,15 @@ class PromptEnhancerModeTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.enhancer = PromptEnhancer(Path(self.temp.name))
         FakeConnection.requests.clear()
+        FakeConnection.responses.clear()
 
     def tearDown(self):
         self.temp.cleanup()
 
-    def run_prompt(self, prompt, *, editing=False):
+    def run_prompt(self, prompt, *, editing=False, mode='cinematic'):
         with patch.object(self.enhancer, 'status', return_value={'state': 'ready'}):
             with patch('prompt_enhancer.http.client.HTTPConnection', FakeConnection):
-                return list(self.enhancer.stream(prompt, editing=editing, mode='cinematic'))
+                return list(self.enhancer.stream(prompt, editing=editing, mode=mode))
 
     def test_four_modes_registered_and_menu_matches(self):
         self.assertEqual(list(ENHANCER_MODES), ['simple', 'detailed', 'creative', 'cinematic'])
@@ -56,45 +83,92 @@ class PromptEnhancerModeTests(unittest.TestCase):
         self.assertIn('premium dark anime wallpaper style', self.enhancer.systems['cinematic'])
         self.assertIn('Dramatic</button>', menu)
 
-    def test_generation_sends_cinematic_system_prompt(self):
-        events = self.run_prompt('A white-haired girl looking at the sky')
-        self.assertEqual(events[0], {'state': 'started'})
-        self.assertEqual(events[1], {'text': 'A cinematic illustration.'})
-        self.assertEqual(events[-1]['state'], 'done')
-        method, path, body, _ = FakeConnection.requests[-1]
-        self.assertEqual((method, path), ('POST', '/v1/chat/completions'))
-        self.assertEqual(body['messages'][0]['content'], self.enhancer.systems['cinematic'])
-        self.assertIn('A white-haired girl looking at the sky', body['messages'][1]['content'])
-        self.assertEqual(body['messages'][1]['content'],
-                         'Rewrite this image description as an English prompt:\n\nA white-haired girl looking at the sky')
-        self.assertEqual(body['temperature'], 0.3)
+    def test_all_four_modes_receive_only_corrected_en_us(self):
+        original = 'um homem agachado ao lado do carro, farol esquerdo apagado'
+        corrected = 'A man crouches beside the car with its left headlight off.'
+        for mode, (_, temperature, _) in ENHANCER_MODES.items():
+            with self.subTest(mode=mode):
+                FakeConnection.requests.clear()
+                FakeConnection.responses[:] = [
+                    FakeResponse(corrected, reasoning='hidden corrector thinking'),
+                    FakeResponse('A finished visual prompt.', reasoning='hidden enhancer thinking'),
+                ]
+                events = self.run_prompt(original, mode=mode)
+                self.assertEqual(events[0], {'state': 'started'})
+                self.assertEqual([event['text'] for event in events if 'text' in event],
+                                 ['A finished visual prompt.'])
+                self.assertEqual(events[-1]['state'], 'done')
+                self.assertEqual(len(FakeConnection.requests), 2)
+                for method, path, body, headers in FakeConnection.requests:
+                    self.assertEqual((method, path), ('POST', '/v1/chat/completions'))
+                    self.assertEqual([m['role'] for m in body['messages']], ['system', 'user'])
+                    self.assertFalse(body['cache_prompt'])
+                    self.assertTrue(body['stream'])
+                    self.assertEqual(headers['Authorization'], 'Bearer ' + self.enhancer.token)
+                first, second = [r[2] for r in FakeConnection.requests]
+                self.assertEqual(first['messages'][0]['content'], self.enhancer.corrector_system)
+                self.assertIn('en-US', first['messages'][1]['content'])
+                self.assertIn(original, first['messages'][1]['content'])
+                self.assertEqual(first['temperature'], CORRECTOR_TEMPERATURE)
+                self.assertEqual(first['reasoning_budget_tokens'], 512)
+                self.assertEqual(second['reasoning_budget_tokens'], 192)
+                self.assertEqual(second['messages'][0]['content'], self.enhancer.systems[mode])
+                self.assertIn(corrected, second['messages'][1]['content'])
+                self.assertNotIn(original, second['messages'][1]['content'])
+                self.assertEqual(second['temperature'], temperature)
+                self.assertEqual([e['stage'] for e in events if 'stage' in e], ['corrector', 'enhancer'])
+                self.assertEqual(''.join(e.get('answer','') for e in events if e.get('phase')=='corrector'), corrected)
+                self.assertEqual(''.join(e.get('answer','') for e in events if e.get('phase')=='enhancer'), 'A finished visual prompt.')
+                self.assertEqual([e['thought'] for e in events if 'thought' in e], ['hidden corrector thinking','hidden enhancer thinking'])
 
-    def test_thinking_tokens_remain_hidden_in_all_modes(self):
-        class ThoughtResponse(FakeResponse):
-            def __iter__(self):
-                yield b'data: {"choices":[{"delta":{"reasoning_content":"private analysis"}}]}\n'
-                yield b'data: {"choices":[{"delta":{"content":"Final visible prompt."},"finish_reason":"stop"}]}\n'
-                yield b'data: [DONE]\n'
-
-        class ThoughtConnection(FakeConnection):
-            def getresponse(self):
-                return ThoughtResponse()
-
-        with patch.object(self.enhancer, 'status', return_value={'state': 'ready'}):
-            with patch('prompt_enhancer.http.client.HTTPConnection', ThoughtConnection):
-                for mode in ENHANCER_MODES:
-                    events = list(self.enhancer.stream('A person beside a car.', mode=mode))
-                    self.assertEqual([event['text'] for event in events if 'text' in event],
-                                     ['Final visible prompt.'])
-                    self.assertEqual(events[-1]['state'], 'done')
+    def test_corrector_rules_preserve_intent_and_literal_image_text(self):
+        rules = self.enhancer.corrector_system
+        for phrase in ('American English (en-US)', 'Do not embellish',
+                       'left from right', 'everything else remains unchanged',
+                       'do not translate that literal image text',
+                       'No headings, bullets'):
+            self.assertIn(phrase, rules)
 
     def test_reference_edit_preserves_edit_scope(self):
-        self.run_prompt('Change only the background to blue', editing=True)
-        message = FakeConnection.requests[-1][2]['messages'][1]['content']
-        self.assertIn('Rewrite this image edit', message)
-        self.assertEqual(message,
-                         'Rewrite this image edit as an English instruction:\n\nChange only the background to blue')
+        original = 'muda só o fundo pra azul'
+        corrected = 'Change only the background to blue; everything else remains unchanged.'
+        FakeConnection.responses[:] = [FakeResponse(corrected), FakeResponse()]
+        self.run_prompt(original, editing=True)
+        first, second = [r[2]['messages'][1]['content'] for r in FakeConnection.requests]
+        self.assertEqual(first,
+                         'Interpret, correct, and translate this reference-image edit into en-US:\n\n' + original)
+        self.assertEqual(second, 'Rewrite this image edit as an English instruction:\n\n' + corrected)
         self.assertIn('everything else stays unchanged', self.enhancer.systems['cinematic'])
+
+    def test_failed_corrector_never_calls_enhancer(self):
+        for bad in (FakeResponse('   '), FakeResponse('Partial.', done=False),
+                    FakeResponse('Truncated.', finish='length'), FakeResponse('Partial.', finish='error')):
+            with self.subTest(bad=bad):
+                FakeConnection.requests.clear()
+                FakeConnection.responses[:] = [bad]
+                with patch.object(self.enhancer, 'status', return_value={'state': 'ready'}):
+                    with patch('prompt_enhancer.http.client.HTTPConnection', FakeConnection):
+                        events = []
+                        with self.assertRaises(RuntimeError):
+                            for event in self.enhancer.stream('Raw description.', mode='creative'):
+                                events.append(event)
+                self.assertEqual(len(FakeConnection.requests), 1)
+                self.assertFalse(any('text' in event or event.get('state') == 'done' for event in events))
+                self.assertFalse(self.enhancer.busy)
+
+    def test_failed_enhancer_never_publishes_corrected_or_partial_prompt(self):
+        FakeConnection.responses[:] = [
+            FakeResponse('Corrected but private.'), FakeResponse('Unfinished final.', done=False),
+        ]
+        with patch.object(self.enhancer, 'status', return_value={'state': 'ready'}):
+            with patch('prompt_enhancer.http.client.HTTPConnection', FakeConnection):
+                events = []
+                with self.assertRaises(RuntimeError):
+                    for event in self.enhancer.stream('Original.', mode='simple'):
+                        events.append(event)
+        self.assertEqual(len(FakeConnection.requests), 2)
+        self.assertFalse(any('text' in event or event.get('state') == 'done' for event in events))
+        self.assertFalse(self.enhancer.busy)
 
     def test_on_demand_load_and_unload(self):
         class OwnedProcess:
@@ -113,18 +187,20 @@ class PromptEnhancerModeTests(unittest.TestCase):
                 with patch('prompt_enhancer.http.client.HTTPConnection', FakeConnection):
                     result = list(self.enhancer.stream('A purple fox.', mode='cinematic'))
         start.assert_called_once()
-        terminate.assert_any_call(process)
+        terminate.assert_called_once_with(process)
+        self.assertEqual(len(FakeConnection.requests), 2)
         self.assertEqual(result[-1]['state'], 'done')
         self.assertEqual(self.enhancer.state, 'stopped')
         self.assertIsNone(self.enhancer.process)
         self.assertFalse(self.enhancer.busy)
 
-    def test_disconnect_and_cancel_release_process(self):
+    def test_disconnect_and_cancel_between_stages_release_process(self):
         class OwnedProcess:
             def poll(self):
                 return None
 
         for cancel in (False, True):
+            FakeConnection.requests.clear()
             process = OwnedProcess()
             def launch():
                 self.enhancer.process = process
@@ -134,14 +210,47 @@ class PromptEnhancerModeTests(unittest.TestCase):
                     with patch('prompt_enhancer.http.client.HTTPConnection', FakeConnection):
                         iterator = self.enhancer.stream('Blue cat.', mode='cinematic')
                         self.assertEqual(next(iterator), {'state': 'started'})
-                        self.assertIn('text', next(iterator))
+                        self.assertEqual(next(iterator), {'stage': 'corrector'})
+                        for event in iterator:
+                            if event == {'state': 'working'}: break
+                        self.assertEqual(event, {'state': 'working'})
+                        self.assertEqual(len(FakeConnection.requests), 1)
+                        self.assertIs(self.enhancer.process, process)
                         if cancel:
                             self.enhancer.cancel_current()
-                        iterator.close()
-            terminate.assert_any_call(process)
+                            with self.assertRaisesRegex(RuntimeError, 'canceled'):
+                                next(iterator)
+                        else:
+                            iterator.close()
+            terminate.assert_called_once_with(process)
+            self.assertEqual(len(FakeConnection.requests), 1)
             self.assertIsNone(self.enhancer.process)
             self.assertEqual(self.enhancer.state, 'stopped')
             self.assertFalse(self.enhancer.busy)
+
+    def test_cancel_during_each_private_completion(self):
+        for canceled_stage in (1, 2):
+            FakeConnection.requests.clear()
+            enhancer = self.enhancer
+            class CancelResponse(FakeResponse):
+                def __iter__(self):
+                    yield self.event({'reasoning_content': 'hidden thought'})
+                    enhancer.cancel_current()
+                    yield self.event({'content': 'Do not publish.'}, 'stop')
+                    yield b'data: [DONE]\n'
+            FakeConnection.responses[:] = (
+                [CancelResponse()] if canceled_stage == 1 else
+                [FakeResponse('Corrected English.'), CancelResponse()]
+            )
+            with patch.object(enhancer, 'status', return_value={'state': 'ready'}):
+                with patch('prompt_enhancer.http.client.HTTPConnection', FakeConnection):
+                    events = []
+                    with self.assertRaisesRegex(RuntimeError, 'canceled'):
+                        for event in enhancer.stream('Raw input.', mode='simple'):
+                            events.append(event)
+            self.assertEqual(len(FakeConnection.requests), canceled_stage)
+            self.assertFalse(any('text' in event or event.get('state') == 'done' for event in events))
+            self.assertFalse(enhancer.busy)
 
     def test_cancel_while_loading_stops_owned_process(self):
         from threading import Event, Thread
@@ -185,6 +294,7 @@ class PromptEnhancerModeTests(unittest.TestCase):
         self.assertEqual(settings['runtime']['gpu_layers'], 999)
         self.assertEqual(settings['runtime']['reasoning'], 'on')
         self.assertEqual(settings['runtime']['reasoning_budget'], 192)
+        self.assertEqual(settings['runtime']['corrector_reasoning_budget'], 512)
         self.assertEqual(settings['runtime']['reasoning_format'], 'deepseek')
         self.assertEqual(self.enhancer.binary.name, 'llama-server')
         self.assertEqual(self.enhancer.binary.parent.name, 'llama-vulkan')

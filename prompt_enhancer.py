@@ -1,4 +1,4 @@
-"""Owned Vulkan llama-server, loaded per enhancement and released afterward."""
+"""Two private completion stages in one owned Vulkan llama-server session."""
 import json
 import http.client
 import os
@@ -17,6 +17,9 @@ from resident import terminate
 MAX_PROMPT_CHARS = 16000
 CONTEXT_SIZE = 4096
 REASONING_BUDGET = 192
+CORRECTOR_REASONING_BUDGET = 512
+CORRECTOR_TEMPERATURE = .1
+HEARTBEAT_INTERVAL = 1.0
 ENHANCER_MODES = {
     'simple': ('prompt-enhancer-system.txt', .4, ''),
     'detailed': ('prompt-enhancer-detailed.txt', .2,
@@ -39,6 +42,7 @@ class PromptEnhancer:
             mode: (RESOURCE_ROOT / filename).read_text(encoding='utf-8')
             for mode, (filename, _, _) in ENHANCER_MODES.items()
         }
+        self.corrector_system = (RESOURCE_ROOT / 'prompt-corrector.txt').read_text(encoding='utf-8')
         self.lock=threading.RLock()
         self.request_lock=threading.Lock()
         self.stop_event=threading.Event()
@@ -75,7 +79,7 @@ class PromptEnhancer:
             if self.stop_event.is_set() or self.request_cancel.is_set():return
             with self.lock:self.process=None
             if not self.binary.is_file() or not self.model.is_file():
-                raise RuntimeError('The prompt enhancer is missing. Run tools/setup-prompt-enhancer.py from the project folder.')
+                raise RuntimeError('The prompt enhancer is missing. Run ./install.sh from the project folder.')
             # Never attach to, replace or stop a server owned by another app.
             with socket.socket() as listener:
                 listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
@@ -131,6 +135,94 @@ class PromptEnhancer:
         worker=self.worker
         if worker and worker is not threading.current_thread():worker.join(timeout=5)
 
+    def _check_cancel(self):
+        if self.stop_event.is_set() or self.request_cancel.is_set():
+            raise RuntimeError('Prompt enhancement canceled.')
+
+    def _complete(self, system, user_message, temperature, *, phase, reasoning_budget=REASONING_BUDGET):
+        """Stream model-emitted reasoning and answer deltas to the local popup.
+        Return only a validated answer for the next stage or final prompt.
+        """
+        self._check_cancel()
+        body = {
+            'messages': [
+                {'role': 'system', 'content': system},
+                {'role': 'user', 'content': user_message},
+            ],
+            'stream': True, 'max_tokens': -1,
+            'temperature': temperature, 'top_p': .9,
+            'cache_prompt': False,
+            'reasoning_budget_tokens': reasoning_budget,
+        }
+        complete = False
+        finish = None
+        parts = []
+        written = 0
+        thought_written = 0
+        started = time.monotonic()
+        last_heartbeat = started
+        connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=120)
+        try:
+            connection.request('POST', '/v1/chat/completions',
+                               body=json.dumps(body).encode('utf-8'),
+                               headers={'Content-Type': 'application/json',
+                                        'Authorization': 'Bearer ' + self.token})
+            with self.lock:
+                self.native_socket = connection.sock
+            self._check_cancel()
+            response = connection.getresponse()
+            if response.status != 200:
+                # The native error may include the prompt or local paths; keep it private.
+                raise RuntimeError('The prompt enhancer rejected a request. Try a shorter description.')
+            for raw in response:
+                self._check_cancel()
+                now = time.monotonic()
+                if now - started > 120:
+                    raise RuntimeError('Prompt enhancement timed out.')
+                line = raw.decode('utf-8').strip()
+                if line.startswith('data:'):
+                    data = line[5:].strip()
+                    if data == '[DONE]':
+                        complete = True
+                        break
+                    event = json.loads(data)
+                    if event.get('error'):
+                        raise RuntimeError('The prompt enhancer could not complete the request. Try again.')
+                    for choice in event.get('choices', []):
+                        finish = choice.get('finish_reason') or finish
+                        delta = choice.get('delta', {})
+                        thought = delta.get('reasoning_content')
+                        if isinstance(thought, str) and thought and thought_written < MAX_PROMPT_CHARS:
+                            thought = thought[:MAX_PROMPT_CHARS - thought_written]
+                            thought_written += len(thought)
+                            yield {'phase': phase, 'thought': thought}
+                            self._check_cancel()
+                        token = delta.get('content') or ''
+                        if token:
+                            written += len(token)
+                            if written > MAX_PROMPT_CHARS:
+                                raise RuntimeError('The enhanced prompt exceeded the character limit. Try a shorter description.')
+                            parts.append(token)
+                            yield {'phase': phase, 'answer': token}
+                            self._check_cancel()
+                if now - last_heartbeat >= HEARTBEAT_INTERVAL:
+                    last_heartbeat = now
+                    yield {'state': 'working'}
+        except OSError as exc:
+            self._check_cancel()
+            raise RuntimeError('The prompt enhancer connection was interrupted. Try again.') from exc
+        finally:
+            connection.close()
+            with self.lock:
+                self.native_socket = None
+        self._check_cancel()
+        if finish == 'length':
+            raise RuntimeError(f'The prompt enhancer reached its {CONTEXT_SIZE}-token context limit. Try a shorter description.')
+        result = ''.join(parts).strip()
+        if not complete or finish != 'stop' or not result:
+            raise RuntimeError('The prompt enhancer did not finish. Try again.')
+        return result
+
     def stream(self,prompt,editing=False,*,mode='simple'):
         if not isinstance(prompt,str) or not prompt.strip() or len(prompt)>MAX_PROMPT_CHARS or '\0' in prompt:
             raise ValueError('Enter a valid description before enhancing the prompt.')
@@ -147,17 +239,43 @@ class PromptEnhancer:
             if self.status()['state']!='ready':
                 self.start()
                 deadline=time.monotonic()+120
+                last_heartbeat=time.monotonic()
                 while True:
-                    if self.stop_event.is_set() or self.request_cancel.is_set():raise RuntimeError('Prompt enhancement canceled.')
+                    self._check_cancel()
                     state=self.status()
                     if state['state']=='ready':break
                     if state['state']=='error':raise RuntimeError(state['error'])
-                    if time.monotonic()>deadline:raise RuntimeError('The prompt enhancer is still loading. Try again.')
+                    now=time.monotonic()
+                    if now>deadline:raise RuntimeError('The prompt enhancer is still loading. Try again.')
+                    if now-last_heartbeat>=HEARTBEAT_INTERVAL:
+                        last_heartbeat=now
+                        yield {'state':'working'}
                     self.request_cancel.wait(.1)
+            self._check_cancel()
+            started=time.monotonic()
+            # Stage 1: the original language is accepted only here. The corrector
+            # resolves its meaning and returns a plain en-US paragraph.
+            correction_instruction = (
+                'Interpret, correct, and translate this reference-image edit into en-US:'
+                if editing else
+                'Interpret, correct, and translate this image description into en-US:'
+            )
+            yield {'stage': 'corrector'}
+            corrected = yield from self._complete(
+                self.corrector_system,
+                f'{correction_instruction}\n\n{prompt.strip()}',
+                CORRECTOR_TEMPERATURE,
+                phase='corrector', reasoning_budget=CORRECTOR_REASONING_BUDGET,
+            )
+            # Same loaded model, new independent request. Only the corrected
+            # paragraph is passed to the existing mode; no conversation history.
+            self._check_cancel()
+            yield {'state':'working'}
+            self._check_cancel()
             instruction = ('Rewrite this image edit as an English instruction:' if editing else
                            'Rewrite this image description as an English prompt:')
             _, temperature, mode_instruction = ENHANCER_MODES[mode]
-            user_message = f'{instruction}\n\n{prompt.strip()}'
+            user_message = f'{instruction}\n\n{corrected}'
             if mode_instruction:
                 if editing:
                     mode_instruction += ' Enrich only the requested change. Preserving the scope of the edit takes priority over adding detail.'
@@ -166,52 +284,13 @@ class PromptEnhancer:
                     opening = 'Start directly with the main subject.'
                 user_message += (f'\n\n{mode_instruction} Show the same subjects, actions, and place in the same moment. '
                                  f'Write only the finished English paragraph. {opening}')
-            messages = [
-                {'role': 'system', 'content': self.systems[mode]},
-                {'role': 'user', 'content': user_message},
-            ]
-            body={'messages':messages,
-                  'stream':True,'max_tokens':-1,'temperature':temperature,'top_p':.9,'cache_prompt':True}
-            complete=False;written=0;finish=None;started=time.monotonic()
-            connection=http.client.HTTPConnection('127.0.0.1',self.port,timeout=120)
-            try:
-                connection.request('POST','/v1/chat/completions',body=json.dumps(body).encode('utf-8'),
-                                   headers={'Content-Type':'application/json','Authorization':'Bearer '+self.token})
-                with self.lock:self.native_socket=connection.sock
-                if self.request_cancel.is_set():raise RuntimeError('Prompt enhancement canceled.')
-                response=connection.getresponse()
-                if response.status!=200:
-                    detail=response.read(8192).decode('utf-8',errors='replace')
-                    try:detail=json.loads(detail).get('error',{}).get('message',detail)
-                    except (ValueError,AttributeError):pass
-                    raise RuntimeError(f'The prompt enhancer rejected the request: {detail}')
-                for raw in response:
-                    if self.stop_event.is_set() or self.request_cancel.is_set():raise RuntimeError('Prompt enhancement canceled.')
-                    if time.monotonic()-started>120:raise RuntimeError('Prompt enhancement timed out.')
-                    line=raw.decode('utf-8').strip()
-                    if not line.startswith('data:'):continue
-                    data=line[5:].strip()
-                    if data=='[DONE]':complete=True;break
-                    event=json.loads(data)
-                    if event.get('error'):raise RuntimeError(str(event['error']))
-                    for choice in event.get('choices',[]):
-                        finish=choice.get('finish_reason') or finish
-                        token=choice.get('delta',{}).get('content') or ''
-                        if token:
-                            written+=len(token)
-                            if written>MAX_PROMPT_CHARS:raise RuntimeError('The enhanced prompt exceeded the character limit. Try a shorter description.')
-                            yield {'text':token}
-            except OSError as exc:
-                if self.request_cancel.is_set():raise RuntimeError('Prompt enhancement canceled.') from exc
-                raise
-            finally:
-                connection.close()
-                with self.lock:self.native_socket=None
-            if self.request_cancel.is_set():raise RuntimeError('Prompt enhancement canceled.')
-            if not complete or not written:raise RuntimeError('The prompt enhancer did not finish. Try again.')
-            if finish=='length':raise RuntimeError(f'The prompt enhancer reached its {CONTEXT_SIZE}-token context limit. Try a shorter description.')
-            # Free VRAM before the browser sees a completed enhancement.
+            yield {'stage': 'enhancer'}
+            enhanced = yield from self._complete(self.systems[mode], user_message, temperature, phase='enhancer')
+            self._check_cancel()
+            # Release VRAM before committing the complete result to the input.
+            # Stage deltas are displayed separately and never replace the input.
             self._release()
+            yield {'text':enhanced}
             yield {'state':'done','seconds':round(time.monotonic()-started,2)}
         finally:
             try:self._release()
