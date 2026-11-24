@@ -148,6 +148,60 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
         self.assertEqual(up_args[up_args.index('-i')+1], args[args.index('-o')+1])
         self.assertEqual(len(self.executable.with_suffix('.calls').read_text().splitlines()), 2)
 
+    def test_startup_preload_is_optional_persisted_and_reuses_resident_command(self):
+        self.manager.keep_loaded = True
+        self.assertFalse(self.manager.preload_model)
+        with patch.object(self.manager.resident,'ensure') as ensure:
+            self.assertFalse(self.manager.preload_selected_model())
+            ensure.assert_not_called()
+        settings = {**self.manager.model_settings(),'preload_model':True}
+        self.manager.configure(settings,persist=True,allow_missing=True)
+        self.assertIs(self.manager.store.load()['preload_model'],True)
+        self.assertIs(self.manager.model_settings()['preload_model'],True)
+        self.manager.preload_model=False
+        self.manager.configure(self.manager.store.load(),allow_missing=True)
+        self.assertTrue(self.manager.preload_model)
+        self.manager.executable.with_name('sd-server').touch()
+        previous_job=dict(self.manager.job)
+        with patch.object(self.manager.resident,'ensure') as ensure, patch.object(self.manager.resident,'generate') as generate:
+            self.assertTrue(self.manager.preload_selected_model())
+            ensure.assert_called_once()
+            generate.assert_not_called()
+            command,env,root,log,vision,check=ensure.call_args.args
+            self.assertIn('--offload-to-cpu',command)
+            self.assertIn('--eager-load',command)
+            self.assertEqual(env.get('SD_MMAP_FLAGS'),'populate')
+            self.assertNotIn('--eager-load',self.manager._resident_command({**self.manager.model_settings(),'preload_model':False},self.manager.resident_policy,True))
+            self.assertNotIn('SD_MMAP_FLAGS',self.manager._resident_environment({}, {'preload_model':False},True))
+            self.assertEqual(command[command.index('--diffusion-model')+1],str(self.manager.model))
+            self.assertEqual(command,self.manager._resident_command(self.manager.model_settings(),self.manager.resident_policy,
+                              self.manager.model_settings()['sd_defaults'][self.manager.sd_profile]['mmap']))
+            self.assertIsNone(vision)
+            check()
+        self.assertEqual(self.manager.job,previous_job)
+        with patch.object(self.manager.resident,'ensure',side_effect=RuntimeError('Test load failure')), patch.object(self.manager.resident,'stop') as stop:
+            self.assertFalse(self.manager.preload_selected_model())
+            stop.assert_called_once()
+            self.assertIn('Test load failure',self.manager.preload_error)
+        with self.assertRaises(ValueError):
+            self.manager.configure({**settings,'preload_model':'true'},persist=True,allow_missing=True)
+        self.assertTrue(self.manager.store.load()['preload_model'])
+
+    def test_prompt_processing_persists_and_rejects_invalid_values(self):
+        expected = {'corrector':False,'enhancer':True,'lite':True}
+        settings = {**self.manager.model_settings(),'prompt_processing':expected}
+        self.manager.configure(settings,persist=True,allow_missing=True)
+        self.assertEqual(self.manager.store.load()['prompt_processing'],expected)
+        self.assertEqual(self.manager.model_settings()['prompt_processing'],expected)
+        self.assertEqual(self.manager.status()['enhancer']['options'],expected)
+        self.assertEqual(self.manager.enhancer.context_size,4096)
+        with self.assertRaises(ValueError):
+            self.manager.configure({**settings,'prompt_processing':{'lite':'true'}},persist=True,allow_missing=True)
+        self.assertEqual(self.manager.store.load()['prompt_processing'],expected)
+        self.manager.enhancer.options = {'corrector':True,'enhancer':True,'lite':False}
+        self.manager.configure(self.manager.store.load(),allow_missing=True)
+        self.assertEqual(self.manager.enhancer.options,expected)
+
     def test_chatrlabs_experimental_profile_uses_eight_steps_and_turbo_lora(self):
         from catalog import PROFILES, PROFILE_FILES
         from model_catalog import diffusion_profile
@@ -594,6 +648,60 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
         self.assertEqual(body['sample_params']['scheduler'],'simple')
         self.assertEqual(body['sample_params']['guidance']['txt_cfg'],1.0)
         self.assertEqual(body['ref_images'],[base64.b64encode(source.read_bytes()).decode()])
+
+    def test_native_cancel_waits_for_terminal_status_and_keeps_engine(self):
+        from resident import ResidentEngine
+        engine=ResidentEngine()
+        engine.log=self.root/'native-cancel.log'
+        engine.log.touch()
+        profile=generation_profile(SD_DEFAULTS['default'],'z-image-turbo',sd_profile='default',base_size=(768,448))
+        output=self.root/'canceled.png'
+        for success in (True,False):
+            checks=iter((None,RuntimeError('Generation canceled.')))
+            def check():
+                result=next(checks)
+                if result:raise result
+            responses=[{'id':'job-1'},{'status':'generating','cancel_requested':True},
+                       {'status':'cancelled'} if success else {'status':'failed'}]
+            with patch.object(engine,'request',side_effect=responses) as request, patch.object(engine,'stop') as stop:
+                with self.assertRaisesRegex(RuntimeError,'Generation canceled'):
+                    engine.generate('A cat',1,profile,[],output,check,preserve_on_cancel=lambda:True)
+                self.assertEqual(request.call_args_list[1].args,('/sdcpp/v1/jobs/job-1/cancel',{}))
+                self.assertEqual(request.call_args_list[2].args,('/sdcpp/v1/jobs/job-1',))
+                self.assertEqual(stop.call_count,0 if success else 1)
+            self.assertFalse(output.exists())
+
+    def test_cancel_preserves_preloaded_engine_but_close_releases_it(self):
+        for preload in (True,False):
+            self.manager.preload_model=preload
+            self.manager.cancel_event.clear()
+            with patch.object(self.manager.resident,'loaded',return_value=True), patch.object(self.manager.resident,'stop') as stop:
+                self.manager.cancel()
+                self.assertEqual(stop.call_count,0 if preload else 1)
+        self.manager.preload_model=True
+        with patch.object(self.manager.resident,'loaded',return_value=True),patch.object(self.manager.resident,'stop') as stop:
+            self.manager.close()
+            stop.assert_called_once()
+
+    def test_cancel_real_worker_preserves_preloaded_resident(self):
+        self.manager.preload_model=True
+        self.manager.keep_loaded=True
+        self.manager.executable.with_name('sd-server').touch()
+        entered=threading.Event()
+        def fake_generate(*args,**kwargs):
+            check=args[5]
+            entered.set()
+            self.assertTrue(self.manager.cancel_event.wait(3))
+            self.assertTrue(kwargs['preserve_on_cancel']())
+            check()
+        with patch.object(self.manager.resident,'ensure'),patch.object(self.manager.resident,'loaded',return_value=True),patch.object(self.manager.resident,'generate',side_effect=fake_generate),patch.object(self.manager.resident,'stop') as stop:
+            self.manager.start('A cat')
+            self.assertTrue(entered.wait(3))
+            state=self.manager.cancel()
+            self.assertEqual(state['state'],'cancelled')
+            self.assertTrue(state['model_loaded'])
+            stop.assert_not_called()
+            self.assertFalse(self.manager.worker.is_alive())
 
     def test_failed_generation_does_not_start_upscaler(self):
         self.manager.start('fail')

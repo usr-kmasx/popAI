@@ -82,7 +82,7 @@ class ResidentEngine:
             path = Path(vision)
             stat = path.stat()
             components.append((str(path),stat.st_size,stat.st_mtime_ns))
-        signature = (tuple(command),tuple(components),str(root),tuple((key,env.get(key)) for key in ('GGML_VK_VISIBLE_DEVICES','GGML_VK_MAX_NODES_PER_SUBMIT','GGML_VK_SERIALIZE_SUBMISSIONS','VK_DRIVER_FILES','VK_ICD_FILENAMES')))
+        signature = (tuple(command),tuple(components),str(root),tuple((key,env.get(key)) for key in ('GGML_VK_VISIBLE_DEVICES','GGML_VK_MAX_NODES_PER_SUBMIT','GGML_VK_SERIALIZE_SUBMISSIONS','VK_DRIVER_FILES','VK_ICD_FILENAMES','SD_MMAP_FLAGS')))
         if self.loaded() and self.signature == signature and (not vision or self.has_vision):
             return
         self.stop()
@@ -120,7 +120,17 @@ class ResidentEngine:
                 pass
             time.sleep(.2)
 
-    def generate(self, prompt, seed, profile, references, output, check, width=960, height=544, on_progress=None, preview_path=None, lora=None):
+    def cancel_job(self, job_path):
+        # Wait for the native cancellation checkpoint before reusing the engine.
+        deadline = time.monotonic() + 30
+        state = self.request(job_path + '/cancel', {}, timeout=5)
+        while state.get('status') not in {'cancelled', 'completed'}:
+            if state.get('status') == 'failed' or time.monotonic() >= deadline:
+                raise RuntimeError('Native job could not be canceled safely.')
+            time.sleep(.2)
+            state = self.request(job_path, timeout=5)
+
+    def generate(self, prompt, seed, profile, references, output, check, width=960, height=544, on_progress=None, preview_path=None, lora=None, preserve_on_cancel=None):
         self.log_start = self.log.stat().st_size if self.log and self.log.exists() else 0
         sample = {'sample_method': profile.get('sampler', 'euler'), 'sample_steps': int(profile['steps']),
                   'guidance': {'txt_cfg': float(profile['cfg'])}}
@@ -129,36 +139,50 @@ class ResidentEngine:
         if profile['schedule'][:1] == ['--sigmas']:
             sample['custom_sigmas'] = [float(value) for value in profile['schedule'][1].split(',')]
         check()
-        submitted = self.request('/sdcpp/v1/img_gen', {
-            'prompt': prompt, 'width': width, 'height': height, 'seed': seed,
-            'sample_params': sample, 'vae_tiling_params': {'enabled': profile.get('vae_tiling',True), **({'tile_size_w':profile['vae_tile_size'],'tile_size_h':profile['vae_tile_size']} if profile.get('vae_tile_size') else {})},
-            'ref_images': [base64.b64encode(path.read_bytes()).decode('ascii') for path in references],
-            **({'lora': [{'path': lora.name, 'multiplier': 1.0}]} if lora else {}),
-            'batch_count': 1, 'preview': 'proj' if preview_path else 'none',
-            'preview_interval': 1, 'output_format': 'png',
-        }, timeout=30)
-        last_preview = None
-        while True:
-            check()
-            state = self.request('/sdcpp/v1/jobs/' + submitted['id'])
-            if on_progress:
-                on_progress(state.get('progress',{}))
-            preview = state.get('preview')
-            if preview_path and preview:
-                revision = (preview.get('pass'), preview.get('step'))
-                if revision != last_preview:
-                    try:
-                        pixels = base64.b64decode(preview['b64_json'], validate=True)
-                        preview_path.write_bytes(pixels)
-                    except (KeyError, ValueError, OSError):
-                        pass
-                    else:
-                        last_preview = revision
-            if state['status'] == 'completed':
+        try:
+            submitted = self.request('/sdcpp/v1/img_gen', {
+                'prompt': prompt, 'width': width, 'height': height, 'seed': seed,
+                'sample_params': sample, 'vae_tiling_params': {'enabled': profile.get('vae_tiling',True), **({'tile_size_w':profile['vae_tile_size'],'tile_size_h':profile['vae_tile_size']} if profile.get('vae_tile_size') else {})},
+                'ref_images': [base64.b64encode(path.read_bytes()).decode('ascii') for path in references],
+                **({'lora': [{'path': lora.name, 'multiplier': 1.0}]} if lora else {}),
+                'batch_count': 1, 'preview': 'proj' if preview_path else 'none',
+                'preview_interval': 1, 'output_format': 'png',
+            }, timeout=30)
+            job_path = '/sdcpp/v1/jobs/' + submitted['id']
+        except Exception:
+            self.stop()
+            raise
+        try:
+            last_preview = None
+            while True:
                 check()
-                output.write_bytes(base64.b64decode(state['result']['images'][0]['b64_json'], validate=True))
-                return
-            if state['status'] in {'failed', 'cancelled'}:
-                raise native_failure(self.log,'image generation',detail=str(state.get('error') or state['status']),offset=self.log_start)
-            time.sleep(.3)
+                state = self.request(job_path)
+                if on_progress:
+                    on_progress(state.get('progress',{}))
+                preview = state.get('preview')
+                if preview_path and preview:
+                    revision = (preview.get('pass'), preview.get('step'))
+                    if revision != last_preview:
+                        try:
+                            pixels = base64.b64decode(preview['b64_json'], validate=True)
+                            preview_path.write_bytes(pixels)
+                        except (KeyError, ValueError, OSError):
+                            pass
+                        else:
+                            last_preview = revision
+                if state['status'] == 'completed':
+                    check()
+                    output.write_bytes(base64.b64decode(state['result']['images'][0]['b64_json'], validate=True))
+                    return
+                if state['status'] in {'failed', 'cancelled'}:
+                    raise native_failure(self.log,'image generation',detail=str(state.get('error') or state['status']),offset=self.log_start)
+                time.sleep(.3)
 
+        except Exception:
+            if preserve_on_cancel and preserve_on_cancel():
+                try:
+                    self.cancel_job(job_path)
+                except Exception:
+                    # An unconfirmed native job must never be left running.
+                    self.stop()
+            raise

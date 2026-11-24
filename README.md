@@ -1,6 +1,6 @@
 # popAI
 
-**Current release: V24-1.11.26** · [Release notes](docs/release-24-1.11.26.md) · [Previous release](docs/release-24.11.26.md)
+**Current release: V24-2.11.26** · [Release notes](docs/release-24-2.11.26.md) · [Previous release](docs/release-24-1.11.26.md)
 
 Generate, edit, and upscale wallpapers locally on Linux. popAI runs image models
 on Vulkan and exports PNGs up to 4K UHD at 16:9. It serves its interface in your
@@ -22,6 +22,9 @@ browser and runs inference on your computer.
   **Creative**, and **Dramatic** modes, plus undo and cancellation. The
   model is unloaded from GPU memory after each enhancement. A first-pass corrector
   interprets and translates the description before the selected enhancer runs.
+  Both stages can be enabled independently, with Normal and Lite processing budgets.
+- Optional startup preloading of the selected image model, with native generation
+  cancellation that preserves the prepared engine when safe.
 - Animated mascot with pointer tracking, idle expressions, blinking, live model
   output, and progress-dependent motion during image generation.
 - Built-in 4:3 sketch editor for Klein and Qwen reference images: freehand strokes, text,
@@ -87,7 +90,7 @@ GPU or unavailable upstream download cannot be fixed automatically.
 
 ## Using popAI
 
-1. Choose one of the three models in **Settings → Stable Diffusion**. Click a
+1. Choose one of the three models in **Settings → Generation**. Click a
    model to expand its generation presets and select one. Manual changes to
    sampling settings activate **Custom settings** while keeping that model.
    Choose a size, aspect ratio, and output resolution in **Resolution**.
@@ -101,18 +104,25 @@ GPU or unavailable upstream download cannot be fixed automatically.
    last option) restores the prior wording when available. The **Dramatic**
    enhancer uses the local Qwen3.5-4B HauhauCS Aggressive Q8_0 with sampling
    temperature `0.3` and a specific dark semi-realistic anime wallpaper art-direction prompt.
-   All four modes first run a private corrector (`prompt-corrector.txt`) that
+   With both stages enabled, all four modes first run a private corrector (`prompt-corrector.txt`) that
    interprets the original description, resolves ambiguity without artistic additions,
    and translates it into en-US while preserving requested literal image text.
    The selected enhancer then receives only the corrected English paragraph.
-   Both independent completion requests use the same loaded Vulkan model,
-   with a 512-token reasoning budget for the corrector and 192 for the enhancer,
+   When both stages are enabled, the independent completion requests use the same loaded Vulkan model,
+   with 8,192 context tokens and a 1,024-token reasoning budget per stage,
+   using Q4_0 key/value caches and Flash Attention. Settings → Generation
+   → Prompt processing allows disabling either stage independently. With only
+   Corrector enabled, clicking the wand corrects directly; with Enhancer enabled,
+   select a mode from the menu. With both disabled, only Undo remains if available.
+   Save the settings to apply them. Lite mode
+   uses 4,096 context tokens with 512/192 reasoning budgets for Corrector/Enhancer.
+   Both modes retain Q4_0 caches and Flash Attention,
    without conversation history.
    The local mascot displays the model-emitted reasoning and answer for each stage
    in a separate minimizable panel. The panel opens on the first text delta,
    preserves each completed response for three seconds, and can be minimized into
    the active eye. Neither replaces the input during processing.
-   The input changes only after both stages succeed; canceling or failing
+   The input changes only after all enabled stages succeed; canceling or failing
    preserves the original, and Undo restores the wording before enhancement.
 4. When the final PNG appears, drag to pan, use the mouse wheel to zoom, or
    double-click to reset the view. Click the download arrow to save the PNG
@@ -128,7 +138,14 @@ GPU or unavailable upstream download cannot be fixed automatically.
 | Qwen Image 2.1 · ChatR Labs Turbo | 8 | 4 steps (Fast; same LoRA) | Supported |
 
 All three models use the same resident `sd-server` engine by default, keeping their
-weights loaded between generations. Qwen applies its Turbo LoRA through the server's
+weights loaded between generations. Enable **Preload on startup** in Settings → Generation
+to prepare the selected model before the server accepts requests. The default is off;
+the engine eagerly loads weights and populates memory-mapped pages when mmap is enabled.
+The memory is not pinned: Linux may reclaim file-backed pages under memory pressure.
+A reference requiring a different vision configuration can still trigger a reload.
+Weight placement follows the existing automatic/manual memory policy. With preload enabled, canceling a
+generation requests native job cancellation and retains the prepared model whenever safe.
+If native cancellation cannot be confirmed, the engine is stopped to prevent orphaned work. Qwen applies its Turbo LoRA through the server's
 structured LoRA request; the `sd-cli` path remains available when persistence is disabled.
 Qwen reference images are copied into temporary, size-limited PNGs aligned to multiples
 of 32, preserving the uploaded originals.
@@ -221,6 +238,8 @@ checks are documented in the [22-1.11.26 release notes](docs/release-22-1.11.26.
 The two-stage prompt workflow and animated mascot are documented in the
 [24.11.26 release notes](docs/release-24.11.26.md). The integrated pose editor
 is documented in the [24-1.11.26 release notes](docs/release-24-1.11.26.md).
+Prompt processing options, startup preloading and native cancellation are covered in
+the [24-2.11.26 release notes](docs/release-24-2.11.26.md).
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py'

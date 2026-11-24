@@ -23,7 +23,7 @@ from urllib.parse import urlsplit, parse_qs
 import hardware
 import model_catalog
 from model_library import ModelLibrary
-from prompt_enhancer import PromptEnhancer, MAX_PROMPT_CHARS
+from prompt_enhancer import PromptEnhancer, MAX_PROMPT_CHARS, normalize_prompt_processing
 from errors import native_failure, explain
 from jobs import JobStore
 from image_pipeline import crop_box, validate_image, finalize, prepare_qwen_reference
@@ -103,6 +103,8 @@ class GenerationManager:
         self.cancel_event = threading.Event()
         self.resident = ResidentEngine()
         self.keep_loaded = keep_loaded
+        self.preload_model = False
+        self.preload_error = None
         self.adaptive_weights = False
         self.resolution = '1080p'
         self.aspect_ratio = '16:9'
@@ -283,8 +285,8 @@ class GenerationManager:
         with self.lock:
             return {'profile': self.profile, 'diffusion': str(self.model),
                     'encoder': str(self.encoder) if self.encoder else '', 'vae': str(self.vae) if self.vae else '',
-                    'vision': str(self.vision) if self.vision else '', 'keep_loaded': self.keep_loaded,
-                    'adaptive_weights': self.adaptive_weights,
+                    'vision': str(self.vision) if self.vision else '', 'keep_loaded': self.keep_loaded, 'preload_model': self.preload_model,
+                    'adaptive_weights': self.adaptive_weights, 'prompt_processing':dict(self.enhancer.options),
                     'resolution': self.resolution, 'aspect_ratio':self.aspect_ratio, 'generation_size':self.generation_size, 'model_roots': [str(p) for p in self.library.roots()],
                     'hardware': dict(HARDWARE_DEFAULTS), 'schema_version': 2, 'sd_profile':self.sd_profile,
                     'sd_default':dict(SD_DEFAULT), 'sd_defaults':SD_DEFAULTS, 'sd_custom':dict(self.sd_custom), 'sd_custom_model':dict(self.sd_custom_model)}
@@ -421,6 +423,9 @@ class GenerationManager:
     def _configure(self, settings, persist=False, allow_missing=False):
         if not isinstance(settings, dict) or settings.get('profile') not in PROFILES:
             raise ValueError('Select a valid set of components.')
+        if self.enhancer.status()['busy']:
+            raise RuntimeError('Wait for prompt processing to finish before changing settings.')
+        prompt_processing = normalize_prompt_processing(settings.get('prompt_processing', self.enhancer.options))
         sd_profile = settings.get('sd_profile', self.sd_profile)
         if sd_profile == 'default' and settings['profile'] == 'z-image-turbo' and settings.get('experimental_five_steps') is True:
             sd_profile = 'z-image-5'
@@ -438,6 +443,9 @@ class GenerationManager:
         custom_model = {k:v for k,v in custom_model.items() if k in ('profile','diffusion','encoder','vae','vision') and isinstance(v,str)}
         if custom_model and custom_model.get('profile') not in PROFILES:
             custom_model = {}
+        preload_model = settings.get('preload_model', self.preload_model)
+        if type(preload_model) is not bool:
+            raise ValueError('Choose whether to preload the selected model on startup.')
         adaptive_weights = settings.get('adaptive_weights', self.adaptive_weights)
         if not isinstance(adaptive_weights, bool):
             raise ValueError('Choose whether to enable automatic weight distribution.')
@@ -477,8 +485,8 @@ class GenerationManager:
             if self.closed or self.job['state'] == 'running':
                 raise RuntimeError('Wait for the job to finish before switching models.')
             if persist:
-                saved = {'profile': settings['profile'], 'adaptive_weights': adaptive_weights,
-                         'resolution': resolution, 'aspect_ratio':aspect_ratio, 'generation_size':generation_size,
+                saved = {'profile': settings['profile'], 'adaptive_weights': adaptive_weights, 'preload_model': preload_model,
+                         'resolution': resolution, 'aspect_ratio':aspect_ratio, 'generation_size':generation_size, 'prompt_processing':prompt_processing,
                          'model_roots': [str(p) for p in roots], 'sd_profile':sd_profile, 'sd_custom':sd_custom, 'sd_custom_model':custom_model,
                          **{key: str(value) if value else '' for key, value in paths.items()}}
                 self.store.save(saved)
@@ -490,6 +498,9 @@ class GenerationManager:
             self.sd_profile, self.sd_custom = sd_profile, sd_custom
             self.sd_custom_model = custom_model
             self.adaptive_weights = adaptive_weights
+            self.preload_model = preload_model
+            self.preload_error = None
+            self.enhancer.options = prompt_processing
             self.resolution = resolution
             self.aspect_ratio, self.generation_size = aspect_ratio, generation_size
             self.model_roots = roots
@@ -497,6 +508,54 @@ class GenerationManager:
             self.profile = settings['profile']
             self.model, self.encoder, self.vae, self.vision = (paths[key] for key in ('diffusion', 'encoder', 'vae', 'vision'))
         return self.model_settings()
+
+    def _resident_command(self, settings, policy, mmap, lora=None):
+        executable = self.executable.with_name('sd-server')
+        if not executable.is_file():
+            raise RuntimeError('The persistent engine has not been built. Run ./build.sh.')
+        device = policy['generator']['ggml']
+        weights = ['--auto-fit', 'on'] if settings.get('adaptive_weights') else ['--offload-to-cpu']
+        command = [str(executable), '--diffusion-model', settings['diffusion'],
+                   '--llm', settings['encoder'], '--vae', settings['vae'],
+                   '--backend', f'diffusion={device},te={device},vae={device}',
+                   *weights, *(['--mmap'] if mmap else [])]
+        if settings.get('preload_model'):
+            command.append('--eager-load')
+        if lora:
+            command.extend(['--lora-model-dir', str(lora.parent)])
+        return command
+
+    @staticmethod
+    def _resident_environment(env, settings, mmap):
+        result = dict(env)
+        if settings.get('preload_model') and mmap:
+            # MAP_POPULATE faults in file-backed pages in the native process.
+            result['SD_MMAP_FLAGS'] = 'populate'
+        return result
+
+    def preload_selected_model(self):
+        """Load the selected resident model once at startup, without submitting a job."""
+        if not self.preload_model or not self.keep_loaded:
+            return False
+        try:
+            if self.config_error or self.selection_error():
+                raise RuntimeError(self.config_error or self.selection_error())
+            settings = self.model_settings()
+            model_catalog.validate(self.profile, {'diffusion':self.model,'encoder':self.encoder,'vae':self.vae,'vision':None})
+            policy, env = hardware.select(hardware.discover(self.executable), HARDWARE_DEFAULTS)
+            sd = self.sd_custom if self.sd_profile == 'custom' else SD_DEFAULTS[self.sd_profile]
+            lora = self.library.find_lora(self.profile,self.model) if PROFILES[self.profile].get('lora') else None
+            command = self._resident_command(settings, policy, sd['mmap'], lora)
+            deadline = time.monotonic() + 300
+            self.resident.ensure(command, self._resident_environment(env, settings, sd['mmap']), ROOT, self.logs / 'resident.log',
+                                 None, lambda: self._check_active(deadline))
+            self.resident_policy = policy
+            return True
+        except (OSError, RuntimeError, ValueError, MemoryError) as exc:
+            self.resident.stop()
+            self.resident_policy = None
+            self.preload_error = str(explain(exc))
+            return False
 
     def _native_progress(self, progress):
         with self.lock:
@@ -615,6 +674,7 @@ class GenerationManager:
         state['profile'] = self.profile
         state['keep_loaded'] = self.keep_loaded
         state['model_loaded'] = self.resident.loaded()
+        state['preload_error'] = self.preload_error
         selection_error=self.selection_error()
         state['config_error'] = self.config_error or selection_error
         state['models_ready'] = selection_error is None
@@ -626,12 +686,14 @@ class GenerationManager:
             with self.lock:
                 self.cancel_event.set()
                 process, worker = self.process, self.worker
+                preserve = not self.closed and self.preload_model and self.resident.loaded()
                 if self.job['state'] == 'running':
                     self.job['phase'] = 'cancelling'
             terminate(process)
-            self.resident.stop()
+            if not preserve:
+                self.resident.stop()
             if worker and worker is not threading.current_thread():
-                worker.join(timeout=10)
+                worker.join(timeout=40 if preserve else 10)
             if worker and worker.is_alive():
                 raise RuntimeError('Cancellation is in progress. Wait for the engine to become available.')
             return self.status()
@@ -741,7 +803,7 @@ class GenerationManager:
             self.job = {'version': 1, 'artifacts_version':2, 'id': identity, 'state': 'running', 'image': None, 'error': None,
                         'started': time.time(), 'seed': seed, 'phase': 'generating',
                         'resolution': self.resolution, 'aspect_ratio':self.aspect_ratio, 'generation_size':self.generation_size, 'hardware': policy, **geometry}
-            self.job['settings'] = {'profile':self.profile, 'diffusion':str(self.model), 'encoder':str(self.encoder), 'vae':str(self.vae), 'vision':str(self.vision) if self.vision else '', 'lora':str(lora) if lora else '', 'keep_loaded':self.keep_loaded, 'adaptive_weights':self.adaptive_weights, 'upscale_model':str(self.upscale_model), 'sd':dict(self.sd_custom if self.sd_profile=='custom' else SD_DEFAULTS[self.sd_profile])}
+            self.job['settings'] = {'profile':self.profile, 'diffusion':str(self.model), 'encoder':str(self.encoder), 'vae':str(self.vae), 'vision':str(self.vision) if self.vision else '', 'lora':str(lora) if lora else '', 'keep_loaded':self.keep_loaded, 'preload_model':self.preload_model, 'adaptive_weights':self.adaptive_weights, 'upscale_model':str(self.upscale_model), 'sd':dict(self.sd_custom if self.sd_profile=='custom' else SD_DEFAULTS[self.sd_profile])}
             self.job['settings']['sd_profile'] = self.sd_profile
             self.job['reference_ids'] = references
             self.job['model_loaded_at_start'] = self.resident.loaded()
@@ -870,23 +932,17 @@ class GenerationManager:
             if not resume:
                 if settings['keep_loaded']:
                     self._check_active(deadline)
-                    server_executable = self.executable.with_name('sd-server')
-                    if not server_executable.is_file():
-                        raise RuntimeError('The persistent engine has not been built. Run ./build.sh.')
-                    startup = [str(server_executable), *components,
-                               '--backend', runtime_backend,
-                               *weight_args, *(['--mmap'] if profile['mmap'] else [])]
-                    if lora:
-                        startup.extend(['--lora-model-dir', str(lora.parent)])
+                    startup = self._resident_command(settings, policy, profile['mmap'], lora)
                     vision = Path(settings['vision']) if is_qwen and reference else None
                     check = lambda: self._check_active(deadline)
                     started = time.monotonic()
-                    self.resident.ensure(startup, env, ROOT, self.logs / 'resident.log',
+                    self.resident.ensure(startup, self._resident_environment(env, settings, profile['mmap']), ROOT, self.logs / 'resident.log',
                                          vision, check)
                     self.resident_policy = policy
                     self.resident.generate(prompt, job['seed'], profile, resident_references, base, check,
                                            width=native_width, height=native_height,
-                                           on_progress=self._native_progress, preview_path=step_preview, lora=lora)
+                                           on_progress=self._native_progress, preview_path=step_preview, lora=lora,
+                                           preserve_on_cancel=lambda: settings.get('preload_model',False) and self.cancel_event.is_set() and not self.closed)
                     generation_seconds = round(time.monotonic() - started, 2)
                     log.write_text('Motor persistente: consulte logs/resident.log.\n', encoding='utf-8')
                 else:
@@ -947,7 +1003,7 @@ class GenerationManager:
             self.job['failed_stage'] = failed_stage
             upscale_device = policy['upscaler']['index']
             shared_gpu = policy['generator'].get('index', upscale_device) == upscale_device
-            if (failed_stage == 'generating' or failure.code in {'ram_exhausted', 'process_killed'}
+            if (failed_stage == 'generating' or (failed_stage == 'cancelling' and not self.resident.loaded()) or failure.code in {'ram_exhausted', 'process_killed'}
                     or (shared_gpu and failure.code in {'device_lost', 'vram_exhausted'})):
                 self.resident.stop()
             output.unlink(missing_ok=True)
@@ -1207,6 +1263,12 @@ def main():
     signal.signal(signal.SIGTERM, stop_server)
     print(f'popAI: http://127.0.0.1:{server.server_port} (press Ctrl+C to stop).', flush=True)
     try:
+        if manager.preload_model:
+            print('Preparing selected model in memory…', flush=True)
+            if manager.preload_selected_model():
+                print('Selected model ready.', flush=True)
+            elif manager.preload_error:
+                print(f'Model preload failed: {manager.preload_error}', flush=True)
         server.serve_forever()
     except KeyboardInterrupt:
         pass

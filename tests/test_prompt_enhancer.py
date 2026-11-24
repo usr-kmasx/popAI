@@ -110,8 +110,8 @@ class PromptEnhancerModeTests(unittest.TestCase):
                 self.assertIn('en-US', first['messages'][1]['content'])
                 self.assertIn(original, first['messages'][1]['content'])
                 self.assertEqual(first['temperature'], CORRECTOR_TEMPERATURE)
-                self.assertEqual(first['reasoning_budget_tokens'], 512)
-                self.assertEqual(second['reasoning_budget_tokens'], 192)
+                self.assertEqual(first['reasoning_budget_tokens'], 1024)
+                self.assertEqual(second['reasoning_budget_tokens'], 1024)
                 self.assertEqual(second['messages'][0]['content'], self.enhancer.systems[mode])
                 self.assertIn(corrected, second['messages'][1]['content'])
                 self.assertNotIn(original, second['messages'][1]['content'])
@@ -293,8 +293,8 @@ class PromptEnhancerModeTests(unittest.TestCase):
         self.assertEqual(settings['runtime']['load_policy'], 'per_request')
         self.assertEqual(settings['runtime']['gpu_layers'], 999)
         self.assertEqual(settings['runtime']['reasoning'], 'on')
-        self.assertEqual(settings['runtime']['reasoning_budget'], 192)
-        self.assertEqual(settings['runtime']['corrector_reasoning_budget'], 512)
+        self.assertEqual(settings['runtime']['reasoning_budget'], 1024)
+        self.assertEqual(settings['runtime']['corrector_reasoning_budget'], 1024)
         self.assertEqual(settings['runtime']['reasoning_format'], 'deepseek')
         self.assertEqual(self.enhancer.binary.name, 'llama-server')
         self.assertEqual(self.enhancer.binary.parent.name, 'llama-vulkan')
@@ -303,6 +303,40 @@ class PromptEnhancerModeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Dramatic'):
             list(self.enhancer.stream('image', mode='unknown'))
 
+
+    def test_independent_stages_and_lite_mode(self):
+        for lite in (False, True):
+            for corrector, enhancer in ((True,True),(True,False),(False,True)):
+                with self.subTest(lite=lite,corrector=corrector,enhancer=enhancer):
+                    self.enhancer.options = dict(corrector=corrector,enhancer=enhancer,lite=lite)
+                    FakeConnection.requests.clear()
+                    events = self.run_prompt('Original input.',mode='cinematic' if enhancer else 'corrector')
+                    expected = (['corrector'] if corrector else []) + (['enhancer'] if enhancer else [])
+                    self.assertEqual([e['stage'] for e in events if 'stage' in e],expected)
+                    self.assertEqual(len(FakeConnection.requests),len(expected))
+                    self.assertEqual(self.enhancer.context_size,4096 if lite else 8192)
+                    self.assertEqual([r[2]['reasoning_budget_tokens'] for r in FakeConnection.requests],
+                        ([512 if lite else 1024] if corrector else [])+([192 if lite else 1024] if enhancer else []))
+                    if enhancer and not corrector:
+                        self.assertIn('Original input.',FakeConnection.requests[0][2]['messages'][1]['content'])
+                    self.assertEqual([e['text'] for e in events if 'text' in e],
+                        ['A cinematic illustration.' if enhancer else FakeConnection.corrected])
+        self.enhancer.options = dict(corrector=True,enhancer=False,lite=False)
+        for mode in ENHANCER_MODES:
+            FakeConnection.requests.clear()
+            with patch.object(self.enhancer,'start') as start:
+                with self.assertRaisesRegex(ValueError,'Enhancer is disabled'):
+                    list(self.enhancer.stream('Original input.',mode=mode))
+            start.assert_not_called()
+            self.assertFalse(FakeConnection.requests)
+        self.enhancer.options = dict(corrector=False,enhancer=False,lite=True)
+        FakeConnection.requests.clear()
+        with patch.object(self.enhancer,'start') as start:
+            with self.assertRaisesRegex(ValueError,'Enable Corrector or Enhancer'):
+                list(self.enhancer.stream('Original input.'))
+        start.assert_not_called()
+        self.assertFalse(FakeConnection.requests)
+        self.assertFalse(self.enhancer.busy)
 
 if __name__ == '__main__':
     unittest.main()

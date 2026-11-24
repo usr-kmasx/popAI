@@ -230,6 +230,41 @@ const outputAspect = document.querySelector('#output-aspect');
 const generationSize = document.querySelector('#generation-size');
 const outputResolution = document.querySelector('#output-resolution');
 const adaptiveWeights = document.querySelector('#adaptive-weights');
+const preloadModel = document.querySelector('#preload-model');
+const processingCard=document.querySelector('#prompt-processing-card');
+const processingToggle=document.querySelector('#prompt-processing-toggle');
+const processingOptions=document.querySelector('#prompt-processing-options');
+const processingSummary=document.querySelector('#prompt-processing-summary');
+const processingInputs={corrector:document.querySelector('#prompt-corrector-enabled'),enhancer:document.querySelector('#prompt-enhancer-enabled'),lite:document.querySelector('#prompt-lite-enabled')};
+const processingDefaults={corrector:true,enhancer:true,lite:false};
+let processingSettings={...processingDefaults};
+let processingSupported=false;
+const processingRestartNotice='Restart popAI to activate prompt processing settings.';
+function acceptProcessingSettings(options){
+  processingSupported=!!options&&Object.keys(processingDefaults).every(key=>typeof options[key]==='boolean');
+  if(processingSupported)processingSettings={...options};
+}
+function allowedPromptMode(mode){
+  if(!processingSupported)return false;
+  return processingSettings.enhancer?['simple','detailed','creative','cinematic'].includes(mode):processingSettings.corrector&&mode==='corrector';
+}
+function processingDraft(){return Object.fromEntries(Object.entries(processingInputs).map(([key,input])=>[key,Boolean(input.checked)]));}
+function refreshProcessingSummary(){
+  const draft=processingDraft();
+  processingSummary.textContent=!draft.corrector&&!draft.enhancer?'Off':draft.lite?'Lite':'Normal';
+}
+function fillProcessingSettings(options){
+  const values={...processingDefaults,...options};
+  for(const [key,input] of Object.entries(processingInputs))input.checked=values[key];
+  refreshProcessingSummary();
+}
+processingToggle.addEventListener('click',()=>{
+  const expanded=processingOptions.hidden;
+  processingOptions.hidden=!expanded;
+  processingCard.classList.toggle('is-expanded',expanded);
+  processingToggle.setAttribute('aria-expanded',String(expanded));
+});
+for(const input of Object.values(processingInputs))input.addEventListener('change',refreshProcessingSummary);
 const timeEstimate = document.querySelector('#time-estimate');
 const estimateArc = document.querySelector('#eta-arc');
 const estimateMessage = document.querySelector('#estimate-message');
@@ -445,7 +480,7 @@ async function request(path, options) {
 }
 
 function canImprovePrompt() {
-  return !busy && ['ready','error','stopped'].includes(enhancerState.state) && !enhancerState.busy && !!prompt.value.trim();
+  return !busy && processingSupported && (processingSettings.corrector||processingSettings.enhancer) && ['ready','error','stopped'].includes(enhancerState.state) && !enhancerState.busy && !!prompt.value.trim();
 }
 
 function setBusy(value = running) {
@@ -465,8 +500,11 @@ function setBusy(value = running) {
   addReference.title = currentFamily !== 'z-image-turbo' ? 'Add reference image' : 'Reference images are unavailable for this model';
   referencePreview.querySelectorAll('button').forEach(button => { button.disabled = busy; });
   modelButton.disabled = uploading || configuring || stopping || enhancing;
-  modelApply.disabled = busy;
+  modelApply.disabled = busy || !processingSupported;
+  processingToggle.disabled=busy || !processingSupported;
+  for(const input of Object.values(processingInputs))input.disabled=busy || !processingSupported;
   modelProfile.disabled = busy;
+  preloadModel.disabled = busy;
   for (const card of profileCards) card.querySelector('.profile-card-toggle').disabled = busy;
   for (const label of profilePresetLabels) label.querySelector('input').disabled = busy;
   profileCustomButton.disabled = busy;
@@ -478,22 +516,28 @@ function setBusy(value = running) {
   cancelGeneration.disabled = stopping;
   stage.classList.toggle('busy', busy);
   form.setAttribute('aria-busy', String(busy));
-  enhanceControl.hidden = busy;
+  enhanceControl.hidden = busy || ((!processingSupported||!processingSettings.corrector&&!processingSettings.enhancer)&&undoPrompt===null);
   const canImprove = canImprovePrompt();
   const canUndo = !busy && undoPrompt !== null;
   undoEnhance.hidden = !canUndo;
   undoEnhance.disabled = !canUndo;
-  enhanceOptions.querySelectorAll('button[data-mode]').forEach(option => { option.disabled = !canImprove; });
+  for(const option of enhanceOptions.querySelectorAll('button[data-mode]')){
+    option.hidden=!processingSupported||!processingSettings.enhancer;
+    option.disabled=!canImprove||option.hidden;
+  }
   enhancePrompt.disabled = !canImprove && !canUndo;
-  if (enhancePrompt.disabled) setEnhanceOptions(false);
-  enhancePrompt.title = !canImprove && canUndo ? 'Undo prompt enhancement' : enhancing ? 'Enhancing prompt…' : enhancerState.state === 'ready' || enhancerState.state === 'stopped' ? 'Enhance prompt' : enhancerState.state==='error' ? 'Retry prompt enhancement' : 'Loading prompt enhancer…';
+  if(enhancePrompt.disabled||(!processingSettings.enhancer&&!canUndo))setEnhanceOptions(false);
+  const correctOnly=allowedPromptMode('corrector');
+  const action=!canImprove&&canUndo?'Undo prompt enhancement':correctOnly?'Correct prompt':'Enhance prompt';
+  enhancePrompt.title=action;
+  enhancePrompt.setAttribute('aria-label',action);
   enhancePrompt.classList.toggle('enhancing',enhancing);
   enhancePrompt.setAttribute('aria-busy',String(enhancing));
   cancelEnhance.hidden = !enhancing;
 }
 
 function setEnhanceOptions(open) {
-  const visible = open && !enhancePrompt.disabled;
+  const visible = open && !enhancePrompt.disabled && ((processingSupported && processingSettings.enhancer && canImprovePrompt()) || !undoEnhance.hidden);
   enhanceOptions.hidden = !visible;
   enhancePrompt.setAttribute('aria-expanded', String(visible));
 }
@@ -517,12 +561,17 @@ document.addEventListener('pointerdown', event => {
   if (!enhanceOptions.hidden && !enhanceControl.contains(event.target)) setEnhanceOptions(false);
 });
 enhancePrompt.addEventListener('click', () => {
+  if (enhancePrompt.disabled) return;
+  if (allowedPromptMode('corrector') && canImprovePrompt()) {
+    setEnhanceOptions(false);
+    return improvePrompt('corrector');
+  }
   setEnhanceOptions(true);
-  if (!enhanceOptions.hidden) enhanceOptions.querySelector('button').focus();
+  if (!enhanceOptions.hidden) enhanceOptions.querySelector('button:not([hidden]):not(:disabled)')?.focus();
 });
 enhanceOptions.addEventListener('click', event => {
   const option = event.target.closest('button[data-mode]');
-  if (option) improvePrompt(option.dataset.mode);
+  if (option && !option.hidden && !option.disabled && allowedPromptMode(option.dataset.mode)) improvePrompt(option.dataset.mode);
 });
 
 const thoughtPopup=document.querySelector('#thought-popup');
@@ -682,7 +731,7 @@ function setMascotPhase(phase){
   mascot.dataset.corrector=phase==='corrector'?'active':'idle';
   mascot.dataset.enhancer=phase==='enhancer'?'active':'idle';
   for(const [key,el] of Object.entries(thoughtSections)){
-    el.querySelector('.thought-state').textContent=key===phase?'Processing':phase==='enhancer'&&key==='corrector'?'Done':'Waiting';
+    el.querySelector('.thought-state').textContent=key===phase?'Processing':phase==='enhancer'&&key==='corrector'&&processingSettings.corrector?'Done':'Waiting';
   }
   if(phase!==thoughtPhase){
     const previous=thoughtPhase;
@@ -703,7 +752,7 @@ function setMascotPhase(phase){
 }
 
 async function improvePrompt(mode) {
-  if (!canImprovePrompt()) return;
+  if (!canImprovePrompt() || !allowedPromptMode(mode)) return;
   const original=prompt.value;
   const originalUndo=undoPrompt;
   savePromptDraft();
@@ -711,7 +760,7 @@ async function improvePrompt(mode) {
   undoPrompt=null;undoEnhance.hidden=true;
   promptNotice=null;
   enhancing=true;enhanceController=new AbortController();setBusy();updateMascot();
-  status.textContent='Correcting prompt…';resetThoughts();setMascotPhase('corrector');stage.classList.remove('error');
+  status.textContent=processingSettings.corrector?'Correcting prompt…':'Enhancing prompt…';resetThoughts();setMascotPhase(processingSettings.corrector?'corrector':'enhancer');stage.classList.remove('error');
   try {
     const response=await fetch('/api/enhance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:original,editing:references.length>0,mode}),signal:enhanceController.signal});
     if(!response.ok) {const error=await response.json();throw new Error(error.error || 'Could not enhance the prompt.');}
@@ -738,7 +787,7 @@ async function improvePrompt(mode) {
     }
     if(!done || !text.trim())throw new Error('Prompt enhancement was interrupted. The original text was restored.');
     prompt.value=text.trim();undoPrompt=original;success=true;
-    showPromptNotice(`Prompt enhanced · ${seconds.toLocaleString('en-US')}s`);
+    showPromptNotice(`Prompt ${processingSettings.enhancer?'enhanced':'corrected'} · ${seconds.toLocaleString('en-US')}s`);
   } catch(error) {
     enhanceController.abort();prompt.value=original;undoPrompt=originalUndo;
     showPromptNotice(error.name==='AbortError'?'Enhancement canceled · Original text restored':error.message);
@@ -1144,7 +1193,10 @@ async function openConfig(tab = 'general') {
     choosePreset();
     outputResolution.value = catalog.selected.resolution || '1080p';
     adaptiveWeights.checked = Boolean(catalog.selected.adaptive_weights);
-    modelStatus.textContent = catalog.errors.join(' · ');
+    preloadModel.checked = catalog.selected.preload_model===true;
+    acceptProcessingSettings(catalog.selected.prompt_processing);
+    fillProcessingSettings(processingSettings);
+    modelStatus.textContent = [!processingSupported?processingRestartNotice:'',...catalog.errors].filter(Boolean).join(' · ');
     if (tab === 'models') await loadLibrary(true);
   } catch (error) { modelStatus.textContent = error.message; }
   finally { configuring = false; setBusy(); }
@@ -1161,16 +1213,17 @@ cancelGeneration.addEventListener('click', async () => {
   setBusy();
   status.textContent = 'Canceling…';
   try {
-    await request('/api/cancel', {method:'POST'});
+    const canceled = await request('/api/cancel', {method:'POST'});
     running = false;
     clockJob = null;
-    status.textContent = 'Generation canceled · Engine unloaded';
+    status.textContent = canceled.model_loaded?'Generation canceled · Model ready':'Generation canceled · Engine unloaded';
   } catch (error) { status.textContent = error.message; }
   finally { stopping = false; setBusy(); }
 });
 
 modelApply.addEventListener('click', async () => {
   if (busy) return;
+  if(!processingSupported){modelStatus.textContent=processingRestartNotice;return;}
   configuring = true;
   setBusy(false);
   modelStatus.textContent = 'Saving…';
@@ -1179,8 +1232,10 @@ modelApply.addEventListener('click', async () => {
       customDraft = readSd();
       customModel = {profile:activeFamily,...Object.fromEntries(['diffusion','encoder','vae','vision'].map(key => [key,modelSlots[key].value]))};
     }
-    const settings = {model_roots:modelRootPaths, profile:activeFamily, sd_custom_model:customModel, sd_profile:modelProfile.value, sd_custom:customDraft, adaptive_weights:adaptiveWeights.checked, resolution:outputResolution.value, aspect_ratio:outputAspect.value, generation_size:generationSize.value, ...Object.fromEntries(Object.entries(modelSlots).map(([key, select]) => [key,select.value]))};
+    const settings = {preload_model:preloadModel.checked,prompt_processing:processingDraft(),model_roots:modelRootPaths, profile:activeFamily, sd_custom_model:customModel, sd_profile:modelProfile.value, sd_custom:customDraft, adaptive_weights:adaptiveWeights.checked, resolution:outputResolution.value, aspect_ratio:outputAspect.value, generation_size:generationSize.value, ...Object.fromEntries(Object.entries(modelSlots).map(([key, select]) => [key,select.value]))};
     const saved = await request('/api/models', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(settings)});
+    acceptProcessingSettings(saved.prompt_processing);
+    if(!processingSupported)throw new Error(processingRestartNotice);
     activeFamily = saved.profile;
     modelsReady = true;
     currentFamily = activeFamily;
@@ -1466,6 +1521,7 @@ async function refresh() {
     if (epoch !== previewEpoch || uploading || configuring || stopping || enhancing) return;
     if(discardedReferences.size)releaseReferences([]);
     enhancerState=job.enhancer || {state:'stopped'};
+    acceptProcessingSettings(enhancerState.options);
     modelsReady=job.models_ready!==false;
     const jobKey=JSON.stringify([job.id || null,job.state]);
     if(jobKey!==observedJobKey || job.state==='running')promptNotice=null;
@@ -1522,12 +1578,13 @@ async function refresh() {
       modelButton.title = 'Adjust settings';
     } else if (job.state === 'cancelled') {
       clearGenerationPreview();
-      status.textContent = 'Generation canceled · Enter another prompt to create more';
+      status.textContent = job.model_loaded?'Generation canceled · Model ready':'Generation canceled · Enter another prompt to create more';
     } else {
       clearGenerationPreview();
     }
     if(job.state!=='running') {
       if(job.config_error)status.textContent=job.config_error;
+      else if(job.preload_error && !job.model_loaded && job.state==='idle')status.textContent='Preload failed · '+job.preload_error;
       else if(promptNotice?.jobKey===observedJobKey && !resultError)status.textContent=promptNotice.text;
     }
   } catch (error) {

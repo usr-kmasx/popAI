@@ -17,7 +17,7 @@ function harness(job, dimensions=[1920,1080], decodeFails=false, randomSeed=39, 
     Option:class {constructor(text,value){this.textContent=text;this.value=value;}},
     document:{addEventListener(){},querySelector:query,createElement:kind=>kind==='canvas'?{getContext:()=>({drawImage(){}}),toBlob:cb=>cb({size:12})}:element()},
     window:{location:{origin:'http://127.0.0.1:7860'},addEventListener(event,handler){windowEvents[event]=handler;},setTimeout:(fn,delay)=>{if(delay>=2500){const token=Symbol();holds.set(token,{fn,due:now+delay});return token;}return timers.push(fn);},clearTimeout:token=>holds.delete(token),setInterval:fn=>intervals.push(fn),sessionStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value)},localStorage:{getItem:key=>localStorage.get(key)??null,setItem:(key,value)=>localStorage.set(key,value),removeItem:key=>localStorage.delete(key)}},performance:{now:()=>now},Blob,Image:class {constructor(){Object.assign(this,element(),{naturalWidth:dimensions[0],naturalHeight:dimensions[1]});}async decode(){if(decodeFails)throw Error('decode');}},URL:{createObjectURL:()=> 'blob:ref',revokeObjectURL(){}},
-    fetch:async(path,options)=>{calls.push({path,options});return {ok:true,json:async()=>{if(path==='/api/reference'){const letter=['a','b','c','d','e','f'][calls.filter(call=>call.path==='/api/reference').length-1];return {id:letter.repeat(32),image:`/references/${letter.repeat(32)}.png`};}return path.split('?')[0]==='/api/status'?job:{};}};}});
+    fetch:async(path,options)=>{calls.push({path,options});return {ok:true,json:async()=>{if(path==='/api/reference'){const letter=['a','b','c','d','e','f'][calls.filter(call=>call.path==='/api/reference').length-1];return {id:letter.repeat(32),image:`/references/${letter.repeat(32)}.png`};}return path.split('?')[0]==='/api/status'?(job.legacy?job:{...job,enhancer:{state:'stopped',...job.enhancer,options:job.enhancer?.options||{corrector:true,enhancer:true,lite:false}}}):{};}};}});
   vm.runInContext(fs.readFileSync('web/app.js','utf8'),context);
   return {elements,query,timers,calls,intervals,windowEvents,frameMessages,context,advance:ms=>{now+=ms;intervals.forEach(fn=>fn());for(const [token,item] of holds){if(item.due<=now){holds.delete(token);item.fn();}}}};
 }
@@ -513,4 +513,90 @@ test('generation instructions target only the indexed editor references',()=>{
  assert.doesNotMatch(output,/image 1\b/);
  assert.equal(run("generationPrompt('Create a white-haired character',[referenceFixtures[0]])"),raw);
  assert.equal(run("generationPrompt('Create a white-haired character',[])"),raw);
+});
+
+test('prompt processing card expands independently and supports three persisted options', async()=>{
+ const job={state:'idle',enhancer:{state:'stopped',options:{corrector:true,enhancer:false,lite:true}}};
+ const h=harness(job);await tick();
+ const run=code=>vm.runInContext(code,h.context);
+ const panel=h.query('#prompt-processing-options');
+ assert.equal(panel.hidden,true);
+ h.query('#prompt-processing-toggle').events.click();
+ assert.equal(panel.hidden,false);
+ run('fillProcessingSettings(processingSettings)');
+ assert.equal(h.query('#prompt-corrector-enabled').checked,true);
+ assert.equal(h.query('#prompt-enhancer-enabled').checked,false);
+ assert.equal(h.query('#prompt-lite-enabled').checked,true);
+ assert.equal(h.query('#prompt-processing-summary').textContent,'Lite');
+ h.query('#prompt').value='A cat';
+ assert.equal(run('canImprovePrompt()'),true);
+ assert.equal(h.query('#enhance-prompt').title,'Correct prompt');
+ assert.equal(run("allowedPromptMode('cinematic')"),false);
+ assert.equal(run("allowedPromptMode('corrector')"),true);
+ await run("improvePrompt('cinematic')");
+ assert.equal(h.calls.filter(c=>c.path==='/api/enhance').length,0);
+ h.query('#prompt-corrector-enabled').checked=false;
+ h.query('#prompt-corrector-enabled').events.change();
+ assert.equal(h.query('#prompt-processing-summary').textContent,'Off');
+ assert.equal(run('processingDraft().corrector'),false);
+ job.enhancer.options={corrector:false,enhancer:false,lite:true};
+ await h.timers.shift()();
+ assert.equal(run('canImprovePrompt()'),false);
+ assert.equal(h.query('#enhance-control').hidden,true);
+ h.query('#prompt-processing-toggle').events.click();
+ assert.equal(panel.hidden,true);
+});
+
+test('stale server cannot expose or execute prompt processing modes',async()=>{
+ const h=harness({state:'idle',legacy:true,enhancer:{state:'stopped'}});
+ await tick();
+ h.query('#prompt').value='A cat';
+ const run=code=>vm.runInContext(code,h.context);
+ assert.equal(run('canImprovePrompt()'),false);
+ assert.equal(h.query('#enhance-control').hidden,true);
+ assert.equal(h.query('#model-apply').disabled,true);
+ await run("improvePrompt('cinematic')");
+ assert.equal(h.calls.filter(c=>c.path==='/api/enhance').length,0);
+});
+
+test('wand corrects directly only with corrector alone; enhancer requires mode selection',async()=>{
+ for(const [corrector,enhancer] of [[true,false],[true,true],[false,true],[false,false]]){
+  const modes=[];
+  const h=harness({state:'idle',enhancer:{state:'stopped',options:{corrector,enhancer,lite:false}}},undefined,false,39,new Map(),new Map(),({query,element})=>{
+    for(const mode of ['simple','detailed','creative','cinematic']){
+      const button=element();button.dataset.mode=mode;modes.push(button);
+    }
+    query('#enhance-options').querySelectorAll=()=>modes;
+    query('#enhance-options').querySelector=()=>modes.find(b=>!b.hidden&&!b.disabled);
+  });
+  await tick();
+  h.query('#prompt').value='A cat';
+  vm.runInContext('setBusy()',h.context);
+  const wand=h.query('#enhance-prompt'),menu=h.query('#enhance-options');
+  assert.ok(modes.every(b=>b.hidden===!enhancer));
+  h.query('#enhance-control').events.pointerenter({pointerType:'mouse'});
+  assert.equal(menu.hidden,!enhancer);
+  await wand.events.click();
+  const calls=h.calls.filter(c=>c.path==='/api/enhance');
+  assert.equal(calls.length,corrector&&!enhancer?1:0);
+  if(calls.length)assert.equal(JSON.parse(calls[0].options.body).mode,'corrector');
+  else assert.equal(menu.hidden,!enhancer);
+  if(enhancer){
+    assert.equal(vm.runInContext("allowedPromptMode('corrector')",h.context),false);
+    await vm.runInContext("improvePrompt('corrector')",h.context);
+    assert.equal(h.calls.filter(c=>c.path==='/api/enhance').length,0);
+  }
+ }
+});
+
+test('startup preload switch belongs to generation profile and follows busy state',()=>{
+ const html=fs.readFileSync('web/index.html','utf8');
+ assert.match(html,/id="preload-model" type="checkbox" role="switch"/);
+ assert.match(html,/Preload on startup/);
+ const h=harness({state:'idle'});
+ const run=code=>vm.runInContext(code,h.context);
+ run('setBusy(true)');
+ assert.equal(h.query('#preload-model').disabled,true);
+ run('setBusy(false)');
+ assert.equal(h.query('#preload-model').disabled,false);
 });

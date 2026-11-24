@@ -21,13 +21,21 @@
   },
   "runtime": {
     "gpu_layers": 999,
-    "context": 4096,
+    "context": 8192,
     "reasoning": "on",
     "port": 8081,
     "threads": 4,
     "load_policy": "per_request",
-    "reasoning_budget": 192,
-    "corrector_reasoning_budget": 512,
-    "reasoning_format": "deepseek"
+    "reasoning_budget": 1024,
+    "corrector_reasoning_budget": 1024,
+    "reasoning_format": "deepseek",
+    "cache_type_k": "q4_0",
+    "cache_type_v": "q4_0",
+    "flash_attention": true,
+    "lite": {
+      "context": 4096,
+      "reasoning_budget": 192,
+      "corrector_reasoning_budget": 512
+    }
   }
 }
