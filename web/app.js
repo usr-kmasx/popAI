@@ -762,6 +762,19 @@ function validSketchState(state) {
       state.base.length > 1600000 || !/^data:image\/png;base64,[a-zA-Z0-9+/=]+$/.test(state.base))) return false;
   try { return JSON.stringify(state).length <= 2000000; } catch { return false; }
 }
+function generationPrompt(text, attached){
+  const instructions=[];
+  attached.forEach((reference,index)=>{
+    if(!validSketchState(reference.sketch))return;
+    const image='image '+(index+1);
+    if(reference.sketch.items.some(item=>item.kind==='pose')){
+      instructions.push('Use '+image+' only as a guide for body poses, relative positions and composition. Render the characters described in the text, not the mannequin, construction lines, colors or sketch style.');
+    }else{
+      instructions.push('Use '+image+' as a guide for spatial layout and composition. Render the scene described in the text, rather than reproducing the sketch style or guide marks.');
+    }
+  });
+  return instructions.length?text+'\n\n'+instructions.join(' '):text;
+}
 function isSketchReference(reference) {
   return !!reference.sketch || reference.name === 'Sketch 4:3';
 }
@@ -1207,6 +1220,29 @@ async function prepareReference(file) {
   }
 }
 
+const poseDialog=document.querySelector('#pose-dialog'),poseFrame=document.querySelector('#pose-frame');
+
+function validPoseState(state){
+ if(!state||state.version!==1||!state.P||!Array.isArray(state.layers)||state.layers.length!==17||!state.visible||!state.widths)return false;
+ try{return JSON.stringify(state).length<30000&&Object.values(state.P).every(p=>Array.isArray(p)&&p.length===2&&p.every(v=>Number.isFinite(v)&&Math.abs(v)<10000));}catch{return false;}
+}
+function openPose(){
+ if(busy||poseDialog.open||!sketchDialog.open)return;
+ poseFrame.src='/pose.html';poseDialog.showModal();
+}
+poseFrame.addEventListener('load',()=>{
+ if(poseDialog.open)poseFrame.contentWindow.postMessage({type:'popai-pose:load',state:null,fromSketch:sketchDialog.open},location.origin);
+});
+poseDialog.addEventListener('close',()=>{poseFrame.removeAttribute('src');});
+window.addEventListener('message',event=>{
+ if(event.origin!==location.origin||event.source!==poseFrame.contentWindow||!poseDialog.open)return;
+ if(event.data?.type==='popai-pose:close'){poseDialog.close();return;}
+ if(event.data?.type!=='popai-pose:submit'||!sketchDialog.open||busy)return;
+ const {destination,blob,state}=event.data;
+ if(destination!=='sketch'||!(blob instanceof Blob)||blob.type!=='image/png'||!blob.size||blob.size>25*1024*1024||!validPoseState(state))return;
+ sketchFrame.contentWindow.postMessage({type:'popai-sketch:insert-pose',blob},location.origin);
+ poseDialog.close();
+});
 let editingSketchId = null;
 let initialSketchState = null;
 async function openSketch(reference = null) {
@@ -1255,6 +1291,7 @@ sketchDialog.addEventListener('close', () => {
 });
 window.addEventListener('message', async event => {
   if (event.origin !== window.location.origin || event.source !== sketchFrame.contentWindow || !sketchDialog.open) return;
+  if (event.data?.type === 'popai-sketch:pose') {openPose();return;}
   if (event.data?.type === 'popai-sketch:close') {
     sketchDialog.close();
     return;
@@ -1565,7 +1602,9 @@ form.addEventListener('submit', async event => {
   clearThoughtHold();displayThought('idle');
   status.textContent = 'Starting…';
   try {
-    await request('/api/generate', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({prompt: prompt.value.trim(), seed: pageSeed, reference: references.map(reference => reference.id)})});
+    const effectivePrompt=generationPrompt(prompt.value.trim(),references);
+    if(effectivePrompt.length>16000)throw new Error('Shorten the description to leave room for sketch reference instructions.');
+    await request('/api/generate', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({prompt: effectivePrompt, seed: pageSeed, reference: references.map(reference => reference.id)})});
   } catch (error) {
     setBusy(false);
     stage.classList.add('error');

@@ -497,3 +497,20 @@ test('visible corrector stays for three seconds while enhancer text buffers',asy
  h.advance(3000);assert.equal(run('thoughtDisplayPhase'),'enhancer');
  h.advance(3000);assert.equal(h.query('#thought-popup').hidden,true);
 });
+
+test('generation instructions target only the indexed editor references',()=>{
+ const h=harness({state:'idle',profile:'flux-2-klein'});
+ const run=code=>vm.runInContext(code,h.context);
+ const raw='Create a white-haired character';
+ const imported={name:'Sketch 4:3'};
+ const sketch={sketch:{version:1,items:[]}};
+ const pose={sketch:{version:1,items:[{kind:'pose',x:1,y:2,w:3,h:4,png:'data:image/png;base64,AAAA'}]}};
+ h.context.referenceFixtures=[imported,pose,sketch];
+ const output=run("generationPrompt('Create a white-haired character',referenceFixtures)");
+ assert.ok(output.startsWith(raw+'\n\n'));
+ assert.match(output,/Use image 2 only as a guide for body poses/);
+ assert.match(output,/Use image 3 as a guide for spatial layout/);
+ assert.doesNotMatch(output,/image 1\b/);
+ assert.equal(run("generationPrompt('Create a white-haired character',[referenceFixtures[0]])"),raw);
+ assert.equal(run("generationPrompt('Create a white-haired character',[])"),raw);
+});

@@ -776,6 +776,13 @@ server.main()
         thread.start()
         base = f'http://127.0.0.1:{server.server_port}'
         try:
+            with urllib.request.urlopen(base + '/pose.html') as response:
+                self.assertIn("frame-ancestors 'self'",response.headers['Content-Security-Policy'])
+                self.assertIn(b'/pose.js',response.read())
+            for path in ('/pose.js','/pose.css'):
+                with urllib.request.urlopen(base + path) as response:
+                    self.assertEqual(response.status,200)
+                    self.assertNotIn("'unsafe-inline'",response.headers['Content-Security-Policy'])
             with urllib.request.urlopen(base + '/eyes.js?v=mascot1') as response:
                 self.assertIn('text/javascript', response.headers['Content-Type'])
                 self.assertIn(b'scheduleBlink', response.read())

@@ -3,9 +3,10 @@
 if (window.parent !== window) document.documentElement.classList.add('embedded');
 const canvas=document.querySelector('#canvas'),ctx=canvas.getContext('2d'),W=960,H=720;
 const $=selector=>document.querySelector(selector);
-const buttons=[...document.querySelectorAll('.tool')],swatches=[...document.querySelectorAll('[data-color]')];
+const buttons=[...document.querySelectorAll('.tool[data-tool]')],swatches=[...document.querySelectorAll('[data-color]')];
 let mode='pen',shape='rect',ink='#ffffff',items=[],states=[[]],step=0,current=null,gesture=null,selected=-1,entryPos=null,toastTimer=null;
 let basePNG=null,baseImage=null;
+const poseImages=new Map();
 const copy=value=>JSON.parse(JSON.stringify(value)),brush=()=>Number($('#size').value)*2;
 const refreshHistory=()=>{$('#undo').disabled=step===0;$('#redo').disabled=step===states.length-1;};
 function tool(next){
@@ -41,6 +42,11 @@ function pos(e){const r=canvas.getBoundingClientRect();return {
  y:Math.max(0,Math.min(H,(e.clientY-r.top)*H/r.height))
 };}
 function draw(item){
+ if(item.kind==='pose'){
+  const im=poseImages.get(item.png);
+  if(im)ctx.drawImage(im,item.x,item.y,item.w,item.h);
+  return;
+ }
  ctx.lineWidth=item.w;ctx.lineJoin='round';ctx.lineCap='round';ctx.strokeStyle=item.color;ctx.fillStyle=item.color;
  if(item.kind==='pen'||item.kind==='eraser'){
   ctx.globalCompositeOperation=item.kind==='eraser'?'destination-out':'source-over';
@@ -65,7 +71,7 @@ function shifted(item,dx,dy){
  const x=copy(item),shift=p=>{p.x+=dx;p.y+=dy;};
  if(x.points)x.points.forEach(shift);
  if(x.a){shift(x.a);shift(x.b);}
- if(x.kind==='text'){x.x+=dx;x.y+=dy;}return x;
+ if(x.kind==='text'||x.kind==='pose'){x.x+=dx;x.y+=dy;}return x;
 }
 function arrowHead(item){
  const dx=item.b.x-item.a.x,dy=item.b.y-item.a.y,dist=Math.hypot(dx,dy);
@@ -78,6 +84,7 @@ function arrowHead(item){
  }));
 }
 function itemBounds(item){
+ if(item.kind==='pose')return {x:item.x,y:item.y,w:item.w,h:item.h};
  if(item.kind==='text'){
   ctx.font='500 '+item.w+'px system-ui';
   const width=ctx.measureText(item.value).width;
@@ -107,7 +114,7 @@ function hitItem(item,p,inside=false){
  if(item.kind==='eraser')return false; // A borracha é uma operação, não um objeto selecionável.
  const b=itemBounds(item),slack=12;
  if(p.x<b.x-slack||p.x>b.x+b.w+slack||p.y<b.y-slack||p.y>b.y+b.h+slack)return false;
- if(item.kind==='text')return true;
+ if(item.kind==='text'||item.kind==='pose')return true;
  if(item.points){
   if(item.points.length===1)return Math.hypot(p.x-item.points[0].x,p.y-item.points[0].y)<=item.w/2+slack;
   return item.points.slice(1).some((b,i)=>distanceToSegment(p,item.points[i],b)<=item.w/2+slack);
@@ -142,6 +149,12 @@ function scaledItem(item,bounds,corner,dx,dy){
  const sx=Math.min(8,Math.max(0.12,(bounds.w+(left?-dx:dx))/Math.max(1,bounds.w)));
  const sy=Math.min(8,Math.max(0.12,(bounds.h+(top?-dy:dy))/Math.max(1,bounds.h)));
  const result=copy(item);
+ if(item.kind==='pose'){
+  const scale=Math.min(8,Math.max(.12,Math.abs(dx)/Math.max(1,bounds.w)>Math.abs(dy)/Math.max(1,bounds.h)?sx:sy));
+  result.w=item.w*scale;result.h=item.h*scale;
+  result.x=left?anchorX-result.w:anchorX;result.y=top?anchorY-result.h:anchorY;
+  return result;
+ }
  if(item.kind==='text'){
   // Text keeps its font proportions; diagonal dragging changes its font size.
   const uniform=Math.min(8,Math.max(0.2,Math.sqrt(sx*sy)));
@@ -283,7 +296,35 @@ document.addEventListener('keydown',e=>{
  if(e.target===$('#text-entry'))return;
  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?redo():undo();}
  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='y'){e.preventDefault();redo();}
+ if((e.key==='Delete'||e.key==='Backspace')&&mode==='move'&&selected>=0){e.preventDefault();items.splice(selected,1);selected=-1;save();}
  if(e.key==='Escape'){$('#shapes').hidden=true;selected=-1;updateSelection();}
+});
+$('#open-pose').onclick=()=>window.parent.postMessage({type:'popai-sketch:pose'},location.origin);
+window.addEventListener('message',async event=>{
+ if(event.source!==window.parent||event.origin!==location.origin||event.data?.type!=='popai-sketch:insert-pose')return;
+ try{
+  const blob=event.data.blob;
+  if(!(blob instanceof Blob)||blob.type!=='image/png'||blob.size>25*1024*1024)return;
+  const im=await createImageBitmap(blob);
+  const source=document.createElement('canvas');
+  const rasterScale=Math.min(1,960/Math.max(im.width,im.height));
+  source.width=Math.max(1,Math.round(im.width*rasterScale));source.height=Math.max(1,Math.round(im.height*rasterScale));
+  const c=source.getContext('2d');c.drawImage(im,0,0,source.width,source.height);im.close();
+  // Tight bounds around the pose so the selection matches the visible body.
+  const pixels=c.getImageData(0,0,source.width,source.height).data;
+  let x1=source.width,y1=source.height,x2=-1,y2=-1;
+  for(let y=0;y<source.height;y++)for(let x=0;x<source.width;x++)if(pixels[(y*source.width+x)*4+3]>15){x1=Math.min(x1,x);y1=Math.min(y1,y);x2=Math.max(x2,x);y2=Math.max(y2,y);}
+  if(x2<x1||y2<y1)throw Error('Empty pose');
+  const crop=document.createElement('canvas');crop.width=x2-x1+1;crop.height=y2-y1+1;
+  crop.getContext('2d').drawImage(source,x1,y1,crop.width,crop.height,0,0,crop.width,crop.height);
+  const png=crop.toDataURL('image/png');
+  const scale=Math.min(W*.85/crop.width,H*.85/crop.height);
+  const w=crop.width*scale,h=crop.height*scale;
+  const item={kind:'pose',png,x:(W-w)/2,y:(H-h)/2,w,h};
+  if(JSON.stringify({...sketchState(),items:[...items,item]}).length>2000000)throw Error('Sketch storage limit reached');
+  poseImages.set(png,crop);
+  items.push(item);selected=items.length-1;tool('move');save();notice('Pose inserted · move or resize it');
+ }catch(error){notice(error.message);}
 });
 $('#close').onclick=()=>{
  if(window.parent!==window){window.parent.postMessage({type:'popai-sketch:close'},location.origin);return;}
@@ -296,6 +337,7 @@ function validSketch(state){
  if(state.base!=null && (typeof state.base!=='string'||state.base.length>1600000||!/^data:image\/png;base64,[a-zA-Z0-9+/=]+$/.test(state.base)))return false;
  const validPoint=p=>p && Number.isFinite(p.x)&&Number.isFinite(p.y)&&Math.abs(p.x)<100000&&Math.abs(p.y)<100000;
  return state.items.every(item=>{
+  if(item?.kind==='pose')return typeof item.png==='string'&&item.png.length<=1600000&&/^data:image\/png;base64,[a-zA-Z0-9+/=]+$/.test(item.png)&&[item.x,item.y,item.w,item.h].every(Number.isFinite)&&item.w>0&&item.h>0&&item.w<=20000&&item.h<=20000&&Math.abs(item.x)<100000&&Math.abs(item.y)<100000;
   if(!item || !['pen','eraser','rect','ellipse','line','arrow','text'].includes(item.kind)
       || !Number.isFinite(item.w) || item.w<0.05 || item.w>20000
       || !/^#[0-9a-f]{6}$/i.test(item.color))return false;
@@ -317,6 +359,13 @@ window.addEventListener('message',async event=>{
    baseImage=await createImageBitmap(new Blob([bytes],{type:'image/png'}));
    basePNG=state.base;
   }catch{basePNG=null;baseImage=null;}
+ }
+ poseImages.clear();
+ for(const item of state.items.filter(item=>item.kind==='pose')){
+  try{
+   const raw=atob(item.png.slice('data:image/png;base64,'.length));
+   poseImages.set(item.png,await createImageBitmap(new Blob([Uint8Array.from(raw,c=>c.charCodeAt(0))],{type:'image/png'})));
+  }catch{}
  }
  items=copy(state.items);states=[copy(items)];step=0;selected=-1;current=null;gesture=null;
  if(typeof state.color==='string'&&/^#[0-9a-f]{6}$/i.test(state.color))ink=state.color;

@@ -1,6 +1,6 @@
 # popAI
 
-**Current release: V24.11.26** · [Release notes](docs/release-24.11.26.md) · [Previous release](docs/release-23.11.26.md)
+**Current release: V24-1.11.26** · [Release notes](docs/release-24-1.11.26.md) · [Previous release](docs/release-24.11.26.md)
 
 Generate, edit, and upscale wallpapers locally on Linux. popAI runs image models
 on Vulkan and exports PNGs up to 4K UHD at 16:9. It serves its interface in your
@@ -27,6 +27,10 @@ browser and runs inference on your computer.
 - Built-in 4:3 sketch editor for Klein and Qwen reference images: freehand strokes, text,
   rectangles, ellipses, straight lines, and arrows; selection, resizing,
   undo/redo, and re-editing from the reference thumbnail.
+- Integrated 2D pose editor with articulated joints, searchable presets, camera
+  pan and zoom, and movable, proportionally resizable pose objects in sketches.
+  Reference-specific generation instructions distinguish poses and sketches from
+  imported images. No additional model or dependency is required.
 - Click uploaded reference thumbnails to inspect them in a larger preview.
   Hide the prompt manually to view a generated image without the input overlay.
 
@@ -89,7 +93,10 @@ GPU or unavailable upstream download cannot be fixed automatically.
    Choose a size, aspect ratio, and output resolution in **Resolution**.
 2. Enter a prompt and press **Enter**, or use the arrow button beside **New** and **Hide**.
    With a Klein or Qwen profile, use **+** to attach reference images, or the pen beside
-   it to sketch a reference. Z-Image Turbo does not accept reference images.
+   it to sketch a reference. Inside the pencil editor, open the pose tool to
+   select a preset or adjust the joints, then choose **Use in sketch**. Move and
+   resize the pose within your composition before confirming the sketch.
+   Z-Image Turbo does not accept reference images.
 3. Optionally enhance a description with the magic-wand menu. **Undo** (the
    last option) restores the prior wording when available. The **Dramatic**
    enhancer uses the local Qwen3.5-4B HauhauCS Aggressive Q8_0 with sampling
@@ -147,6 +154,30 @@ straight line, arrow), a color palette, stroke-size slider and undo/redo.
 Confirming attaches a PNG reference. This editor currently uses a fixed 4:3
 canvas, even when the output wallpaper aspect ratio differs.
 
+### Pose references
+
+Open the pose tool inside the sketch editor. Choose a searchable preset or
+manipulate the joints, adjust rotations and body-part thickness, mirror the
+pose, and reorder or hide layers. Hold **Space** and drag, or drag with the
+middle mouse button, to pan the camera. Scroll to zoom around the cursor;
+click the zoom percentage to reset the view.
+
+**Use in sketch** inserts a transparent PNG as a selectable object. Move,
+resize proportionally, or delete it; undo/redo and multiple pose objects are
+supported. The original drawing tools remain available. The sketch retains
+editable object positions when reopened, but the inserted pose is rasterized:
+its individual joints cannot be re-articulated inside the sketch. Pose
+projects can be saved and opened separately as JSON in the pose editor.
+
+Only the completed sketch is sent as a reference. When generating, popAI
+adds guidance to the outgoing prompt for each numbered editor reference:
+pose sketches guide posture and composition; ordinary sketches guide layout.
+Images imported with **+** receive no automatic guidance. The visible input
+remains unchanged. This is prompt-based guidance, not guaranteed pose locking;
+results depend on the image model and the requested scene. No new AI model
+or additional inference is used to create poses.
+
+
 Click a reference thumbnail to reopen a sketch for editing or enlarge a regular
 uploaded image. Reconfirming a sketch replaces its existing reference without
 changing its order. Editable items survive F5 in the same browser tab while
@@ -188,7 +219,8 @@ instructions are described in the [21.11.26 release notes](docs/release-21.11.26
 Qwen Image 2.1, grouped presets, model library changes and compatibility
 checks are documented in the [22-1.11.26 release notes](docs/release-22-1.11.26.md).
 The two-stage prompt workflow and animated mascot are documented in the
-[24.11.26 release notes](docs/release-24.11.26.md).
+[24.11.26 release notes](docs/release-24.11.26.md). The integrated pose editor
+is documented in the [24-1.11.26 release notes](docs/release-24-1.11.26.md).
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py'

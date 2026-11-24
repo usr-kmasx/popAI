@@ -1006,7 +1006,7 @@ def create_server(manager, port=7860):
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
             policy = "default-src 'self'; img-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'"
-            if self.path.split('?', 1)[0] == '/sketch.html':
+            if self.path.split('?', 1)[0] in ('/sketch.html','/pose.html'):
                 policy = policy.replace("frame-ancestors 'none'", "frame-ancestors 'self'")
             if content_type.startswith('image/svg+xml'):
                 styles = re.findall(rb'<style[^>]*>(.*?)</style>',body,re.S)
@@ -1064,6 +1064,9 @@ def create_server(manager, port=7860):
                       '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
                       '/eyes.js': ('eyes.js', 'text/javascript; charset=utf-8'),
                       '/sketch.html': ('sketch.html', 'text/html; charset=utf-8'),
+                      '/pose.html': ('pose.html', 'text/html; charset=utf-8'),
+                      '/pose.js': ('pose.js', 'text/javascript; charset=utf-8'),
+                      '/pose.css': ('pose.css', 'text/css; charset=utf-8'),
                       '/sketch.js': ('sketch.js', 'text/javascript; charset=utf-8'),
                       '/sketch.css': ('sketch.css', 'text/css; charset=utf-8'),
                       '/mascot.svg': ('mascot.svg','image/svg+xml; charset=utf-8'),
