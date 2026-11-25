@@ -19,7 +19,7 @@ def native_failure(log, stage, returncode=None, detail='', offset=0):
     except OSError:
         pass
     text=detail.lower()
-    where=f' See logs/{log.name}.'
+    where=f' Session log: {log}.'
     if any(s in text for s in ('errordevicelost','device lost','vk_error_device_lost')):
         return EngineFailure('device_lost',f'The GPU lost its Vulkan context during {stage}. Wait for the driver to recover before trying again.'+where)
     if any(s in text for s in ('outofdevicememory','out_of_device_memory','out of device memory','failed to allocate vulkan','not enough vram','insufficient vram')):

@@ -384,6 +384,7 @@ test('reload retains the references and result until New clears only the result'
  assert.equal(reloaded.query('#prompt').value,'Change the sky');
  assert.equal(reloaded.query('#reference-preview').children.length,1);
  assert.equal(reloaded.calls.some(call=>call.path==='/api/generate'),false);
+ assert.ok(reloaded.calls.some(call=>call.path==='/api/jobs/'+id+'/discard' && call.options.method==='POST'));
  await reloaded.timers.shift()();
  assert.equal(reloaded.query('#wallpaper').hidden,true);
  await reloaded.query('#form').events.submit({preventDefault(){}});

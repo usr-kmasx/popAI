@@ -1,6 +1,6 @@
 # popAI
 
-**Current release: V24-2.11.26** · [Release notes](docs/release-24-2.11.26.md) · [Previous release](docs/release-24-1.11.26.md)
+**Current release: V25.11.26** · [Release notes](docs/release-25.11.26.md) · [Previous release](docs/release-24-2.11.26.md)
 
 Generate, edit, and upscale wallpapers locally on Linux. popAI runs image models
 on Vulkan and exports PNGs up to 4K UHD at 16:9. It serves its interface in your
@@ -15,6 +15,8 @@ browser and runs inference on your computer.
   size, aspect ratio, and final resolution separately.
 - Model management with three named download folders, reuse of imported models,
   resumable downloads, and SHA-256 checks against the published manifest.
+- Session-only image storage and diagnostics, with no saved generation history.
+  Download an image explicitly to keep it.
 - Live progress and previews. The total includes preparation, generation,
   upscaling, and PNG finalization. The clock shows an estimate for the current
   stage when progress data is available.
@@ -204,8 +206,16 @@ The older standalone editor at `prototypes/sketch.html` is a design prototype;
 the integrated editor lives in `web/sketch.html`, `web/sketch.css`, and
 `web/sketch.js`.
 
-Click Download for a permanent copy of a generated image. The server removes
-temporary images when it shuts down.
+Click Download for a permanent copy of a generated image. Generated images,
+uploaded references and inference logs are stored in a private temporary
+directory for the current server session. Job state exists only in memory;
+there is no saved generation history. New discards the current result, and
+replacing a result removes the previous image. The server removes remaining
+temporary files when it shuts down normally (including Ctrl+C and SIGTERM).
+Retry finishing an image while that session is still open; jobs cannot be
+resumed after restarting the server. Settings, the model library and
+resumable model downloads remain persistent. A forced kill or power loss may leave the system's temporary
+directory until its normal cleanup.
 
 ## Installation and development notes
 
@@ -240,6 +250,9 @@ The two-stage prompt workflow and animated mascot are documented in the
 is documented in the [24-1.11.26 release notes](docs/release-24-1.11.26.md).
 Prompt processing options, startup preloading and native cancellation are covered in
 the [24-2.11.26 release notes](docs/release-24-2.11.26.md).
+Final integrity fixes and temporary storage are covered in the
+[25.11.26 release notes](docs/release-25.11.26.md). Historical validation
+notes may refer to local experimental logs that have since been removed.
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py'

@@ -56,6 +56,10 @@ else:
     prompt = args[args.index('-p')+1]
     base.with_suffix('.prompt').write_text(prompt)
     base.with_suffix('.generation-pid').write_text(str(os.getpid()))
+    refs = [pathlib.Path(args[i+1]) for i,key in enumerate(args) if key=='-r']
+    base.with_suffix('.refs').write_text(json.dumps([
+        {'path':str(path),'dimensions':list(struct.unpack('>II',path.read_bytes()[16:24]))}
+        for path in refs]))
 with base.with_suffix('.calls').open('a') as trace: trace.write(json.dumps(args)+'\\n')
 base.with_suffix('.upscale-args' if upscale else '.args').write_text(json.dumps(args))
 pathlib.Path(__file__).with_suffix('.env').write_text(json.dumps({key: os.environ.get(key) for key in ['GGML_VK_MAX_NODES_PER_SUBMIT', 'GGML_VK_SERIALIZE_SUBMISSIONS']}))
@@ -85,7 +89,7 @@ png += chunk(b'IDAT', zlib.compress((b'\\0' + bytes([16, 32, 48])*width)*height)
 out.write_bytes(png if prompt != 'invalid' else b'broken')
 ''')
         self.executable.chmod(0o755)
-        self.manager = GenerationManager(self.executable, self.model_dir, self.root / 'outputs', self.root / 'logs', upscale_model=self.upscaler,store=SettingsStore(self.root),keep_loaded=False)
+        self.manager = GenerationManager(self.executable, self.model_dir, upscale_model=self.upscaler,store=SettingsStore(self.root),keep_loaded=False)
         self.manager.upscale_executable = self.executable
         self.patches = [patch('server.model_catalog.validate'),patch('server.hardware.discover',return_value=[dict(index=0,name='RADV POLARIS10',type=2,total=8*1024**3,free=7*1024**3,usable=True,ggml='Vulkan0')])]
         for item in self.patches: item.start()
@@ -465,7 +469,9 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
         self.assertEqual(args[args.index('--lora-model-dir')+1],str(self.model_dir))
         for i in range(2):
             tmp=Path(args[[pos for pos,key in enumerate(args) if key=='-r'][i]+1])
-            self.assertEqual(struct.unpack('>II',tmp.read_bytes()[16:24]),(32,32))
+            observed=json.loads(self.executable.with_suffix('.refs').read_text())[i]
+            self.assertEqual(observed, {'path':str(tmp),'dimensions':[32,32]})
+            self.assertFalse(tmp.exists(), 'derived reference survived generation')
             self.assertNotEqual(tmp,self.manager.references / (refs[i]['id']+'.png'))
             self.assertEqual(struct.unpack('>II',(self.manager.references / (refs[i]['id']+'.png')).read_bytes()[16:24]),(8,8))
 
@@ -797,6 +803,205 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
             with self.assertRaises(ValueError):
                 self.manager.store_reference(data)
 
+    def test_malformed_profile_and_library_family_return_http_400(self):
+        self.manager.configure(self.manager.model_settings(), persist=True)
+        previous = self.manager.model_settings()
+        saved = self.manager.store.path.read_bytes()
+        library = self.manager.library.snapshot()
+        server = create_server(self.manager, port=0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f'http://127.0.0.1:{server.server_port}'
+        try:
+            for path, body in [
+                *[('/api/settings', {**previous, 'profile': value})
+                  for value in ([], {}, None, True, 123, 'unknown')],
+                *[('/api/library', {'action': 'remove', 'family': value})
+                  for value in ([], {}, None, True, 123, 'unknown')],
+            ]:
+                with self.subTest(path=path, body=body):
+                    request = urllib.request.Request(base + path, data=json.dumps(body).encode(),
+                                                     headers={'Content-Type':'application/json'})
+                    with self.assertRaises(urllib.error.HTTPError) as result:
+                        urllib.request.urlopen(request, timeout=3)
+                    with result.exception as response:
+                        self.assertEqual(response.code, 400)
+                        self.assertIsInstance(json.load(response)['error'], str)
+            self.assertEqual(self.manager.model_settings(), previous)
+            self.assertEqual(self.manager.store.path.read_bytes(), saved)
+            self.assertEqual(self.manager.library.snapshot(), library)
+            with urllib.request.urlopen(base + '/api/status', timeout=3) as response:
+                self.assertEqual(json.load(response)['state'], 'idle')
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_reference_with_valid_crc_but_invalid_pixels_is_rejected(self):
+        def chunk(kind, data):
+            return struct.pack('>I',len(data))+kind+data+struct.pack('>I',zlib.crc32(kind+data))
+        def png(pixels):
+            return (b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',8,8,8,2,0,0,0))
+                    +chunk(b'IDAT',pixels)+chunk(b'IEND',b''))
+        server = create_server(self.manager, port=0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f'http://127.0.0.1:{server.server_port}'
+        try:
+            for data in (png(b'invalid compressed payload'),
+                         png(zlib.compress(b'\0'+b'\x20\x40\x60'*8)),
+                         png(zlib.compress((b'\xff'+b'\x20\x40\x60'*8)*8))):
+                request = urllib.request.Request(base + '/api/reference', data=data,
+                                                 headers={'Content-Type':'image/png'})
+                with self.assertRaises(urllib.error.HTTPError) as result:
+                    urllib.request.urlopen(request, timeout=3)
+                with result.exception as response:
+                    self.assertEqual(response.code, 400)
+                    self.assertIsInstance(json.load(response)['error'], str)
+            self.assertEqual(list(self.manager.references.glob('*.png')), [])
+            valid = reference_png()
+            request = urllib.request.Request(base + '/api/reference', data=valid,
+                                             headers={'Content-Type':'image/png'})
+            with urllib.request.urlopen(request, timeout=3) as response:
+                self.assertEqual(response.status, 201)
+                saved = json.load(response)
+            with urllib.request.urlopen(base + saved['image'], timeout=3) as response:
+                self.assertEqual(response.read(), valid)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_reference_validation_accepts_valid_png_variants(self):
+        from io import BytesIO
+        from PIL import Image
+        for mode in ('1', 'L', 'P', 'LA', 'RGB', 'RGBA', 'I;16'):
+            with self.subTest(mode=mode):
+                output = BytesIO()
+                Image.new(mode, (257, 257)).save(output, format='PNG')
+                data = output.getvalue()
+                saved = self.manager.store_reference(data)
+                self.assertEqual(self.manager.asset_bytes(saved['id'], reference=True), data)
+        # Adam7: encode each of the seven passes and split IDAT across chunks.
+        def chunk(kind, data):
+            return struct.pack('>I',len(data))+kind+data+struct.pack('>I',zlib.crc32(kind+data))
+        w,h = 19,13
+        raw = bytearray()
+        for x,y,dx,dy in ((0,0,8,8),(4,0,8,8),(0,4,4,8),(2,0,4,4),
+                          (0,2,2,4),(1,0,2,2),(0,1,1,2)):
+            for _ in range(y,h,dy):
+                raw.extend(b'\0'+b'\x20\x40\x60'*len(range(x,w,dx)))
+        compressed = zlib.compress(raw)
+        data = (b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',w,h,8,2,0,0,1))
+                +chunk(b'IDAT',compressed[:7])+chunk(b'IDAT',compressed[7:])+chunk(b'IEND',b''))
+        saved = self.manager.store_reference(data)
+        self.assertEqual(self.manager.asset_bytes(saved['id'], reference=True), data)
+
+    def test_obsolete_corrupt_history_is_ignored_at_startup(self):
+        legacy = self.root/'jobs'
+        legacy.mkdir()
+        (legacy/'latest.json').write_text('[]')
+        (legacy/('1'*32+'.json')).write_text('[]')
+        manager = GenerationManager(self.executable,self.model_dir,
+                                    upscale_model=self.upscaler,
+                                    store=SettingsStore(self.root),keep_loaded=False)
+        try:
+            self.assertEqual(manager.status()['state'], 'idle')
+            self.assertFalse(hasattr(manager, 'jobs'))
+            self.assertEqual((legacy/'latest.json').read_text(), '[]')
+        finally:
+            manager.close()
+
+    def test_session_files_are_removed_and_settings_survive_restart(self):
+        manager = self.manager
+        manager.configure(manager.model_settings(), persist=True)
+        manager.library.configure(str(self.model_dir),'destination')
+        saved_config = manager.store.path.read_bytes()
+        saved_library = manager.library.path.read_bytes()
+        workspace = manager.workspace
+        identity = '2'*32
+        manager.job = {'id':identity,'state':'done','image':'/images/'+identity+'.png','error':None}
+        manager.last_preview_id = identity
+        for name in ('resident.log','prompt-enhancer.log',identity+'.log'):
+            (manager.logs/name).write_text('session diagnostics')
+        reference = manager.store_reference(reference_png())
+        image = manager.image_path(identity)
+        image.parent.mkdir(parents=True)
+        image.write_bytes(reference_png())
+        self.assertTrue(manager.asset_bytes(identity))
+        self.assertTrue(manager.asset_bytes(reference['id'],reference=True))
+        self.assertEqual(list(workspace.rglob('*.json')), [])
+        manager.close()
+        self.assertFalse(workspace.exists())
+        self.assertEqual(manager.store.path.read_bytes(), saved_config)
+        self.assertEqual(manager.library.path.read_bytes(), saved_library)
+        for name in ('logs','jobs','references','outputs'):
+            self.assertFalse((self.root/name).exists())
+        replacement = GenerationManager(self.executable,self.model_dir,
+                                        upscale_model=self.upscaler,
+                                        store=SettingsStore(self.root),keep_loaded=False)
+        try:
+            self.assertNotEqual(replacement.workspace, workspace)
+            self.assertEqual(replacement.status()['state'],'idle')
+            self.assertIsNone(replacement.asset_bytes(identity))
+            self.assertIsNone(replacement.asset_bytes(reference['id'],reference=True))
+            self.assertEqual(replacement.library.snapshot()['destination'],str(self.model_dir))
+        finally:
+            replacement.close()
+        self.assertFalse(replacement.workspace.exists())
+
+    def test_replacing_generated_result_keeps_only_latest_image(self):
+        self.manager.start('first')
+        first = self.wait_job()
+        self.assertEqual(first['state'], 'done')
+        self.assertTrue(self.manager.image_path(first['id']).is_file())
+        self.manager.start('second')
+        second = self.wait_job()
+        self.assertEqual(second['state'], 'done')
+        self.assertIsNone(self.manager.asset_bytes(first['id']))
+        self.assertEqual(list((self.manager.workspace/'jobs').rglob('*.png')),
+                         [self.manager.image_path(second['id'])])
+        self.assertEqual(list(self.manager.workspace.rglob('*.json')), [])
+
+    def test_new_discards_only_current_result_without_history(self):
+        manager = self.manager
+        current,previous = '2'*32,'3'*32
+        for identity in (current,previous):
+            path = manager.image_path(identity)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(reference_png())
+        manager.job = {'id':current,'state':'done','image':'/images/'+current+'.png','error':None}
+        manager.last_preview_id = current
+        reference = manager.store_reference(reference_png())
+        server = create_server(manager, port=0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f'http://127.0.0.1:{server.server_port}'
+        def discard(identity):
+            req = urllib.request.Request(base+'/api/jobs/'+identity+'/discard',data=b'',method='POST')
+            with urllib.request.urlopen(req,timeout=3) as res:
+                return json.load(res)
+        try:
+            self.assertFalse(discard(previous)['discarded'])
+            self.assertTrue(manager.asset_bytes(current))
+            manager.job['state'] = 'running'
+            with self.assertRaises(urllib.error.HTTPError) as err:
+                discard(current)
+            self.assertEqual(err.exception.code,409)
+            err.exception.close()
+            manager.job['state'] = 'done'
+            self.assertTrue(discard(current)['discarded'])
+            self.assertEqual(manager.status()['state'],'idle')
+            self.assertIsNone(manager.asset_bytes(current))
+            self.assertIsNone(manager.asset_bytes(previous))
+            self.assertEqual(manager.asset_bytes(reference['id'],reference=True),reference_png())
+            self.assertEqual(list(manager.workspace.rglob('*.json')),[])
+            self.assertFalse(discard(current)['discarded'])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
     def test_persistent_child_survives_request_thread_and_stops_with_guard(self):
         from processes import spawn
         from resident import terminate
@@ -846,6 +1051,7 @@ binary=Path(sys.argv[2])
 original=server.GenerationManager.__init__
 def init(self, executable, *a, **kw):
     original(self,binary,*a,keep_loaded=False,**kw)
+    (server.ROOT/'test-workspace.txt').write_text(str(self.workspace))
 server.GenerationManager.__init__=init
 sys.argv=['server.py','--port','0','--model-dir',sys.argv[3],'--upscale-model',sys.argv[4]]
 server.main()
@@ -866,6 +1072,8 @@ server.main()
                 backend_pid = int(pidfile.read_text())
                 process.send_signal(stop_signal)
                 process.wait(timeout=5)
+                workspace = Path((self.root/'test-workspace.txt').read_text())
+                self.assertFalse(workspace.exists(), 'session files survived server shutdown')
                 proc_status = Path(f'/proc/{backend_pid}/status')
                 self.assertTrue(not proc_status.exists() or '\nState:\tZ' in proc_status.read_text(), 'backend still running after server stopped')
             finally:

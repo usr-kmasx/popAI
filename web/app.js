@@ -456,6 +456,8 @@ let shown = null;
 let initialStatusReceived = false;
 let hiddenImageId = null;
 let latestImageId = null;
+let currentJobId = null;
+let discardJobId = null;
 let rememberedResult = null;
 let resultError = null;
 let recoverableJob = null;
@@ -1465,6 +1467,11 @@ newGeneration.addEventListener('click', () => {
   const nextSeed = randomSeed();
   pageSeed = nextSeed === pageSeed ? (pageSeed + 1) & 0x7fffffff : nextSeed;
   hiddenImageId = latestImageId || shown || hiddenImageId;
+  const identity = currentJobId || latestImageId || shown;
+  if (identity && /^[0-9a-f]{32}$/.test(identity)) {
+    discardJobId = identity;
+    discardJob(identity);
+  }
   clearGenerationPreview();
   clearResult();
   resultError = null;
@@ -1512,6 +1519,12 @@ async function showResult(job, announce = true) {
   return true;
 }
 
+function discardJob(identity) {
+  return request('/api/jobs/'+identity+'/discard', {method:'POST'})
+    .then(()=>{if(discardJobId===identity)discardJobId=null;})
+    .catch(()=>{}); // Retry a disconnected request on the next successful poll.
+}
+
 async function refresh() {
   try {
     if (uploading || configuring || stopping || enhancing) return;
@@ -1529,6 +1542,11 @@ async function refresh() {
     reconcileReferences(job.missing_references);
     const initialStatus = !initialStatusReceived;
     initialStatusReceived = true;
+    currentJobId = job.id || null;
+    if (discardJobId) {
+      if (currentJobId === discardJobId && job.state !== 'running') discardJob(discardJobId);
+      else if (currentJobId !== discardJobId) discardJobId=null;
+    }
     latestImageId = job.state === 'done' && job.image ? job.id : null;
     stage.classList.remove('error');
     syncClock(job);

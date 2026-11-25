@@ -359,7 +359,7 @@ class ModelLibrary:
         return self.snapshot()
 
     def remove(self,family):
-        if family not in self.manifest:raise ValueError('Invalid model.')
+        if not isinstance(family,str) or family not in self.manifest:raise ValueError('Invalid model.')
         with self.lock:
             self._available()
             records=[(Path(p),r) for p,r in self.data['managed'].items() if r['family']==family]

@@ -132,7 +132,7 @@ class PromptEnhancer:
             deadline=time.monotonic()+120
             while not self.stop_event.wait(.2):
                 if self.request_cancel.is_set():return
-                if process.poll() is not None:raise RuntimeError('The prompt enhancer failed to load. See logs/prompt-enhancer.log.')
+                if process.poll() is not None:raise RuntimeError(f'The prompt enhancer failed to load. Session log: {self.logs / 'prompt-enhancer.log'}.')
                 if time.monotonic()>deadline:raise RuntimeError('The prompt enhancer took too long to load.')
                 try:
                     req=Request(self.url+'/health',headers={'Authorization':'Bearer '+self.token})

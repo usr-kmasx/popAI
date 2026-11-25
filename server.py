@@ -3,6 +3,7 @@
 import argparse
 import base64
 import hashlib
+import io
 import json
 import os
 import re
@@ -19,13 +20,13 @@ import zlib
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from PIL import Image
 from urllib.parse import urlsplit, parse_qs
 import hardware
 import model_catalog
 from model_library import ModelLibrary
 from prompt_enhancer import PromptEnhancer, MAX_PROMPT_CHARS, normalize_prompt_processing
 from errors import native_failure, explain
-from jobs import JobStore
 from image_pipeline import crop_box, validate_image, finalize, prepare_qwen_reference
 from processes import spawn
 from resident import ResidentEngine, terminate
@@ -75,8 +76,65 @@ def _encoded_size(job):
     return job.get('upscaled_width'), job.get('upscaled_height')
 
 
+def _validate_reference_pixels(data, chunks, width, height):
+    """Check the PNG zlib stream and every scanline, including Adam7 passes."""
+    depth, color, compression, filtering, interlace = data[24:29]
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+    depths = {0: (1, 2, 4, 8, 16), 2: (8, 16), 3: (1, 2, 4, 8), 4: (8, 16), 6: (8, 16)}
+    if color not in channels or depth not in depths[color] or compression or filtering or interlace not in (0, 1):
+        raise ValueError('Invalid PNG header.')
+    passes = ((0, 0, 1, 1),) if not interlace else (
+        (0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4),
+        (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2))
+    rows = []
+    for x, y, dx, dy in passes:
+        w = max(0, (width - x + dx - 1) // dx)
+        h = max(0, (height - y + dy - 1) // dy)
+        if w and h:
+            stride = 1 + (w * channels[color] * depth + 7) // 8
+            rows.append((stride, stride * h))
+    decoder = zlib.decompressobj()
+    pass_index, offset = 0, 0
+
+    def consume(raw):
+        nonlocal pass_index, offset
+        pos = 0
+        while pos < len(raw):
+            if pass_index >= len(rows):
+                raise ValueError('PNG contains excess pixel data.')
+            stride, size = rows[pass_index]
+            count = min(len(raw) - pos, size - offset)
+            first_filter = pos + (-offset % stride)
+            if any(value > 4 for value in raw[first_filter:pos + count:stride]):
+                raise ValueError('Invalid PNG row filter.')
+            pos += count
+            offset += count
+            if offset == size:
+                pass_index += 1
+                offset = 0
+
+    try:
+        for start, end in chunks:
+            for position in range(start, end, 65536):
+                pending = memoryview(data)[position:min(position + 65536, end)]
+                while pending:
+                    consume(decoder.decompress(pending, 65536))
+                    if decoder.unused_data:
+                        raise ValueError('PNG contains extra compressed data.')
+                    pending = decoder.unconsumed_tail
+        while True:
+            raw = decoder.decompress(b'', 65536)
+            if not raw:
+                break
+            consume(raw)
+    except zlib.error as exc:
+        raise ValueError('Invalid compressed PNG data.') from exc
+    if not decoder.eof or pass_index != len(rows) or offset:
+        raise ValueError('PNG pixel data is incomplete.')
+
+
 class GenerationManager:
-    def __init__(self, executable, model_dir, outputs, logs, upscale_model=DEFAULT_UPSCALER, model_roots=None, store=None, *, keep_loaded=True):
+    def __init__(self, executable, model_dir, *, upscale_model=DEFAULT_UPSCALER, model_roots=None, store=None, keep_loaded=True):
         self.executable = Path(executable).resolve()
         self.model_dir = Path(model_dir).resolve()
         self.model_roots = normalize_roots(model_roots or [str(self.model_dir)])
@@ -89,12 +147,12 @@ class GenerationManager:
         self.vae = self.model_dir / MODEL_FILES['vae']
         self.upscale_model = Path(upscale_model).resolve()
         self.upscale_executable = NCNN_EXECUTABLE
-        self.outputs = Path(outputs).resolve()
-        self.logs = Path(logs).resolve()
+        # All runtime artifacts share the existing private session workspace.
+        # Job state lives only in memory; diagnostics disappear on shutdown.
         self.temporary = tempfile.TemporaryDirectory(prefix='popai-')
         self.workspace = Path(self.temporary.name)
+        self.logs = self.workspace / 'logs'
         self.references = self.workspace / 'references'
-        self.outputs.mkdir(parents=True, exist_ok=True)
         self.logs.mkdir(parents=True, exist_ok=True)
         self.enhancer = PromptEnhancer(self.logs)
         self.references.mkdir(parents=True, exist_ok=True)
@@ -109,7 +167,6 @@ class GenerationManager:
         self.resolution = '1080p'
         self.aspect_ratio = '16:9'
         self.generation_size = 'standard'
-        self.jobs = JobStore(self.outputs.parent)
         self.job = {'state': 'idle', 'image': None, 'error': None}
         self.process = None
         self.worker = None
@@ -120,35 +177,16 @@ class GenerationManager:
         self.sd_custom_model = {}
         self.vision = None
         self.last_preview_id=None
-        self.previous_preview_id=None
-        self.previous_preview_until=0
         self.reference_seen={}
         self.reference_released=set()
         self.next_cleanup=0
-        self._restore_job()
-
-    def _restore_job(self):
-        saved = self.jobs.latest()
-        if not saved:
-            return
-        self.job = saved
-        if saved['state'] == 'running':
-            saved.update(state='error', phase='interrupted', error='The app closed before the job finished.', finished=time.time())
-        saved['retryable'] = self._recoverable(saved)
-        self.jobs.save(saved)
 
     def _artifact_paths(self, job):
-        if job.get('artifacts_version')==2:
-            directory=self.workspace/'jobs'/job['id']
-            return directory/'base.png',directory/'upscaled.png'
-        if job.get('artifacts_version')==1:
-            directory=self.jobs.directory/'artifacts'/job['id']
-            return directory/'base.png',directory/'upscaled.png'
-        return self.outputs/(job['id']+'-base.png'),self.outputs/(job['id']+'-upscaled.png')
+        directory = self.workspace/'jobs'/job['id']
+        return directory/'base.png', directory/'upscaled.png'
 
     def image_path(self, identity):
-        temporary = self.workspace/'jobs'/identity/'final.png'
-        return temporary if temporary.is_file() else self.outputs/(identity+'.png')
+        return self.workspace/'jobs'/identity/'final.png'
 
     def asset_bytes(self, identity, reference=False):
         # Keep the snapshot alive through the download even if pruning follows.
@@ -210,7 +248,6 @@ class GenerationManager:
         if self.closed:return
         now=time.time()
         keep={self.job.get('id'),self.last_preview_id}
-        if now<self.previous_preview_until:keep.add(self.previous_preview_id)
         directory=self.workspace/'jobs'
         if directory.is_dir():
             for path in directory.iterdir():
@@ -249,7 +286,18 @@ class GenerationManager:
     def _publish(self, **values):
         with self.lock:
             self.job.update(values)
-            self.jobs.save(self.job)
+
+    def discard_job(self, identity):
+        # New discards the current result, not references or a newer request.
+        with self.operation_lock, self.lock:
+            if self.job.get('id') != identity:
+                return {'discarded': False}
+            if self.job['state'] == 'running':
+                raise RuntimeError('Wait for the current job to finish.')
+            self.job = {'state': 'idle', 'image': None, 'error': None}
+            self.last_preview_id = None
+            self._prune_temporary_locked()
+            return {'discarded': True}
 
     def retry_finalize(self, identity):
         with self.operation_lock:
@@ -260,23 +308,9 @@ class GenerationManager:
                     raise RuntimeError('Wait for the current job to finish.')
                 if self.job.get('id') != identity or not self._recoverable(self.job):
                     raise ValueError('This job has no valid base image to finish.')
-                if self.job.get('artifacts_version')!=2:
-                    old_paths=self._artifact_paths(self.job)
-                    directory=self.workspace/'jobs'/identity
-                    directory.mkdir(parents=True,exist_ok=True)
-                    for source,name in zip(old_paths,('base.png','upscaled.png')):
-                        if source.is_file() and not source.is_symlink():
-                            shutil.copy2(source,directory/name)
-                    self.job['artifacts_version']=2
-                previous_job=dict(self.job)
                 self.cancel_event.clear()
                 self.job.update(state='running', phase='upscaling', error=None, retryable=False, started=time.time(), finalize_only=True, estimated_seconds=None)
                 self.job.pop('finished',None)
-                try:
-                    self.jobs.save(self.job)
-                except OSError as exc:
-                    self.job=previous_job
-                    raise explain(exc) from exc
                 self.worker = threading.Thread(target=self._generate, args=('',dict(self.job),[],True), daemon=True)
                 self.worker.start()
                 return dict(self.job)
@@ -421,7 +455,7 @@ class GenerationManager:
             return self._configure(settings, persist, allow_missing)
 
     def _configure(self, settings, persist=False, allow_missing=False):
-        if not isinstance(settings, dict) or settings.get('profile') not in PROFILES:
+        if not isinstance(settings, dict) or not isinstance(settings.get('profile'), str) or settings['profile'] not in PROFILES:
             raise ValueError('Select a valid set of components.')
         if self.enhancer.status()['busy']:
             raise RuntimeError('Wait for prompt processing to finish before changing settings.')
@@ -711,6 +745,7 @@ class GenerationManager:
         if not 0 < width <= 8192 or not 0 < height <= 8192 or width * height > 16777216:
             raise ValueError('Reference images must fit within 8,192 pixels per side and 16 megapixels in total.')
         position, has_pixels, complete = 8, False, False
+        chunks = []
         while position + 12 <= len(data):
             size = struct.unpack('>I', data[position:position + 4])[0]
             end = position + size + 12
@@ -720,13 +755,27 @@ class GenerationManager:
             crc = struct.unpack('>I', data[end - 4:end])[0]
             if zlib.crc32(data[position + 4:end - 4]) != crc:
                 raise ValueError('The reference image is corrupted.')
-            has_pixels |= kind == b'IDAT'
+            if kind == b'IDAT':
+                has_pixels = True
+                chunks.append((position + 8, end - 4))
             if kind == b'IEND':
                 complete = size == 0 and end == len(data) and has_pixels
                 break
             position = end
         if not complete:
             raise ValueError('The reference image is incomplete or invalid.')
+        _validate_reference_pixels(data, chunks, width, height)
+        # Valid chunk lengths and CRCs do not prove that IDAT can be decoded.
+        # Keep the original bytes, but fully decode before accepting the upload.
+        try:
+            with Image.open(io.BytesIO(data)) as image:
+                if image.format != 'PNG' or image.size != (width, height):
+                    raise ValueError('Invalid PNG format or dimensions.')
+                image.verify()
+            with Image.open(io.BytesIO(data)) as image:
+                image.load()
+        except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as exc:
+            raise ValueError('The reference image is corrupted or cannot be decoded.') from exc
         identity = uuid.uuid4().hex
         with self.lock:
             if self.closed:raise ValueError('The app is shutting down.')
@@ -792,7 +841,6 @@ class GenerationManager:
                 policy = self.resident_policy
             else:
                 policy, _ = hardware.select(hardware.discover(self.executable), HARDWARE_DEFAULTS)
-            previous_job=dict(self.job)
             if any(not path.is_file() for path in reference_paths):
                 raise ValueError('A reference image was removed. Attach it again.')
             identity = uuid.uuid4().hex
@@ -800,18 +848,13 @@ class GenerationManager:
             geometry = image_geometry(self.resolution,self.aspect_ratio,self.generation_size)
             if seed is None:
                 seed = secrets.randbelow(2**31)
-            self.job = {'version': 1, 'artifacts_version':2, 'id': identity, 'state': 'running', 'image': None, 'error': None,
+            self.job = {'id': identity, 'state': 'running', 'image': None, 'error': None,
                         'started': time.time(), 'seed': seed, 'phase': 'generating',
                         'resolution': self.resolution, 'aspect_ratio':self.aspect_ratio, 'generation_size':self.generation_size, 'hardware': policy, **geometry}
             self.job['settings'] = {'profile':self.profile, 'diffusion':str(self.model), 'encoder':str(self.encoder), 'vae':str(self.vae), 'vision':str(self.vision) if self.vision else '', 'lora':str(lora) if lora else '', 'keep_loaded':self.keep_loaded, 'preload_model':self.preload_model, 'adaptive_weights':self.adaptive_weights, 'upscale_model':str(self.upscale_model), 'sd':dict(self.sd_custom if self.sd_profile=='custom' else SD_DEFAULTS[self.sd_profile])}
             self.job['settings']['sd_profile'] = self.sd_profile
             self.job['reference_ids'] = references
             self.job['model_loaded_at_start'] = self.resident.loaded()
-            try:
-                self.jobs.save(self.job)
-            except OSError as exc:
-                self.job=previous_job
-                raise explain(exc) from exc
             self._prune_temporary_locked()
             self.worker = threading.Thread(target=self._generate, args=(prompt.strip(), dict(self.job), reference_paths), daemon=True)
             self.worker.start()
@@ -834,7 +877,7 @@ class GenerationManager:
                 except subprocess.TimeoutExpired:
                     os.killpg(process.pid, signal.SIGKILL)
                     process.wait()
-                raise RuntimeError('The job exceeded the 30-minute limit. See the log in the logs folder.')
+                raise RuntimeError(f'The job exceeded the 30-minute limit. Session log: {log}.')
             finally:
                 with self.lock:
                     if self.process is process:
@@ -850,7 +893,7 @@ class GenerationManager:
 
     def _generate(self, prompt, job, reference=None, resume=False):
         base,upscaled = self._artifact_paths(job)
-        output = base.parent/'final.png' if job.get('artifacts_version')==2 else self.outputs/(job['id']+'.png')
+        output = self.image_path(job['id'])
         log = self.logs / (job['id'] + '.log')
         upscale_log = self.logs / (job['id'] + '-upscale.log')
         settings = job['settings']
@@ -944,7 +987,7 @@ class GenerationManager:
                                            on_progress=self._native_progress, preview_path=step_preview, lora=lora,
                                            preserve_on_cancel=lambda: settings.get('preload_model',False) and self.cancel_event.is_set() and not self.closed)
                     generation_seconds = round(time.monotonic() - started, 2)
-                    log.write_text('Motor persistente: consulte logs/resident.log.\n', encoding='utf-8')
+                    log.write_text(f'Motor persistente: consulte {self.logs / 'resident.log'}.\n', encoding='utf-8')
                 else:
                     generation_seconds = self._run_stage(command, log, env, deadline, 'image generation')
                 if is_qwen and (native_width, native_height) != (base_width, base_height):
@@ -1021,22 +1064,17 @@ class GenerationManager:
                 self.job.update(state=state, phase=state, error=None if cancelled else error,
                                 image=None if error or cancelled else '/images/' + job['id'] + '.png', finished=time.time())
                 if state=='done':
-                    if self.last_preview_id!=job['id']:
-                        self.previous_preview_id=self.last_preview_id
-                        self.previous_preview_until=time.time()+60
                     self.last_preview_id=job['id']
                 self.job['retryable'] = self._recoverable(self.job)
                 self.job['error_info'] = {'code':'cancelled' if cancelled else failure.code if failure else 'stage_failed', 'action':failure.action if failure else None, 'message':error, 'stage':self.job.get('failed_stage'), 'retryable':self.job['retryable']} if error or cancelled else None
-                try:
-                    self.jobs.save(self.job)
-                except OSError:
-                    # The in-memory result and preview remain usable if a manifest cannot be written.
-                    pass
-            if state == 'done' and job.get('artifacts_version')==2:
-                # Only the preview remains until this app session ends.
-                base.unlink(missing_ok=True)
-                upscaled.unlink(missing_ok=True)
-            with self.lock:self._prune_temporary_locked()
+                # Remove all derived reference copies and intermediates no longer
+                # needed, while preserving the current result or recoverable base.
+                for path in base.parent.glob('qwen-reference-*.png'):
+                    path.unlink(missing_ok=True)
+                if state == 'done':
+                    base.unlink(missing_ok=True)
+                    upscaled.unlink(missing_ok=True)
+                self._prune_temporary_locked()
 
     def close(self):
         self.enhancer.close()
@@ -1169,6 +1207,12 @@ def create_server(manager, port=7860):
                     return self.send(400, {'error': str(exc)})
                 except OSError as exc:
                     return self.send(500, {'error': str(explain(exc))})
+            discard = re.fullmatch(r'/api/jobs/([0-9a-f]{32})/discard', self.path)
+            if discard:
+                try:
+                    return self.send(200, manager.discard_job(discard[1]))
+                except RuntimeError as exc:
+                    return self.send(409, {'error': str(exc)})
             retry = re.fullmatch(r'/api/jobs/([0-9a-f]{32})/retry-finalize', self.path)
             if retry:
                 try:
@@ -1245,12 +1289,12 @@ def main():
         configuration_error = f'Could not read the saved settings: {exc}'
     roots = [str(p) for p in (args.model_dir or configuration.get('model_roots', [str(DEFAULT_MODEL_DIR)]))]
     manager = GenerationManager(ROOT / 'backends/stable-diffusion.cpp/build/bin/sd-cli',
-                                roots[0], ROOT / 'outputs', ROOT / 'logs', upscale_model=args.upscale_model,
+                                roots[0], upscale_model=args.upscale_model,
                                 model_roots=roots, store=store)
     manager.config_error = configuration_error
     if configuration:
         try:
-            if configuration.get('profile') not in PROFILES:
+            if not isinstance(configuration.get('profile'), str) or configuration['profile'] not in PROFILES:
                 configuration['profile'] = 'z-image-turbo'
             configuration['model_roots'] = [str(p) for p in roots]
             manager.configure(configuration, allow_missing=True)
