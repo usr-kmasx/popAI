@@ -1,0 +1,14 @@
+{
+  "format": 1,
+  "archive": "popai-backends-linux-x86_64-v3.tar.gz",
+  "size": 145516568,
+  "sha256": "0ff2a739e40c69f3111fa20e1f76586cebfa08a530400eb82898c63be8913b03",
+  "platform": "linux-x86_64-v3",
+  "glibc_min": "2.39",
+  "manifest_sha256": "31750465c27006aba89955ce29b6232fbf34a175924be20ff8ce12fd49e2cc71",
+  "source_sha256": {
+    "sources.json": "3e5c4c3ea5f5196b80da8258fe20c86ae6e2ec23083b517ed32a3920b4db711b",
+    "prompt-enhancer.json": "3ce547e800365bc742e2b66514c527c5071a352c708e4ab0023bb67307f4d455"
+  },
+  "url": "https://github.com/usr-kmasx/popAI/releases/download/27.11.26/popai-backends-linux-x86_64-v3.tar.gz"
+}

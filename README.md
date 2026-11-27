@@ -1,6 +1,6 @@
 # popAI
 
-**Current release: V25.11.26** · [Release notes](docs/release-25.11.26.md) · [Previous release](docs/release-24-2.11.26.md)
+**Current release: V27.11.26** · [Release notes](docs/release-27.11.26.md) · [Download release](https://github.com/usr-kmasx/popAI/releases/tag/27.11.26) · [Previous release](docs/release-25.11.26.md)
 
 Generate, edit, and upscale wallpapers locally on Linux. popAI runs image models
 on Vulkan and exports PNGs up to 4K UHD at 16:9. It serves its interface in your
@@ -53,7 +53,11 @@ meeting these requirements are intended targets; cross-distribution support
 requires runtime validation. The installer may request sudo only for missing
 system runtime packages.
 
-Clone the current repository and run the installer **as your normal user**:
+Download the **Source code (zip)** or **Source code (tar.gz)** from the
+[current release](https://github.com/usr-kmasx/popAI/releases/tag/27.11.26),
+extract it, and run `./install.sh` in the extracted popAI directory as your
+normal user. The installer downloads the native bundle automatically.
+Alternatively, clone the current repository:
 
 ```bash
 git clone https://github.com/usr-kmasx/popAI.git
@@ -244,6 +248,11 @@ The compiled package is not a replacement for the image-model or prompt-model
 downloads.
 
 ## Tests
+
+The current precompiled distribution passed 104 regression tests on Ubuntu
+24.04 CI, plus native startup and Real-ESRGAN GPU checks on Arch Linux.
+See the [27.11.26 release notes](docs/release-27.11.26.md) for exact coverage
+and limitations.
 
 The backend and browser logic tests run without generating images on the GPU.
 The optional headless Chromium sketch tests and their isolated test-server
