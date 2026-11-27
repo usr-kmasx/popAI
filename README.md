@@ -24,7 +24,7 @@ browser and runs inference on your computer.
   **Creative**, and **Dramatic** modes, plus undo and cancellation. The
   model is unloaded from GPU memory after each enhancement. A first-pass corrector
   interprets and translates the description before the selected enhancer runs.
-  Both stages can be enabled independently, with Normal and Lite processing budgets.
+  Thinking can be enabled independently for each stage, with Normal and Lite processing budgets.
 - Optional startup preloading of the selected image model, with native generation
   cancellation that preserves the prepared engine when safe.
 - Animated mascot with pointer tracking, idle expressions, blinking, live model
@@ -110,7 +110,7 @@ GPU or unavailable upstream download cannot be fixed automatically.
 1. Choose one of the three models in **Settings → Generation**. Click a
    model to expand its generation presets and select one. Manual changes to
    sampling settings activate **Custom settings** while keeping that model.
-   Choose a size, aspect ratio, and output resolution in **Resolution**.
+   Choose a generation size, aspect ratio, and **Upscaling** resolution (1080p to 4K UHD).
 2. Enter a prompt and press **Enter**, or use the arrow button beside **New** and **Hide**.
    With a Klein or Qwen profile, use **+** to attach reference images, or the pen beside
    it to sketch a reference. Inside the pencil editor, open the pose tool to
@@ -166,7 +166,8 @@ structured LoRA request; the `sd-cli` path remains available when persistence is
 Qwen reference images are copied into temporary, size-limited PNGs aligned to multiples
 of 32, preserving the uploaded originals.
 Automatic weight placement can use system RAM when GPU memory is limited. The generator produces a base
-image, which the upscaler enlarges to fit the exact output dimensions. The NCNN upscaler
+image that is immediately available for preview and download. Select **Upscale** to enlarge
+it to the configured output dimensions without generating the scene again. The NCNN upscaler
 loads its Real-ESRGAN weights from the original model files when needed, using the Linux
 filesystem page cache when available. It releases its Vulkan resources after each job.
 

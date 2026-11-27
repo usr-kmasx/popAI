@@ -162,6 +162,7 @@ class GenerationManager:
         self.resident = ResidentEngine()
         self.keep_loaded = keep_loaded
         self.preload_model = False
+        self.blur_generation_preview = True
         self.preload_error = None
         self.adaptive_weights = False
         self.resolution = '1080p'
@@ -204,7 +205,7 @@ class GenerationManager:
             if phase == 'generating':
                 path = base.with_name('step-preview.png')
             elif phase in ('upscaling', 'finalizing'):
-                path = base
+                path = self.image_path(identity) if self.job.get('can_upscale') else base
             else:
                 return None
             try:
@@ -306,10 +307,17 @@ class GenerationManager:
             with self.lock:
                 if self.closed or self.job['state'] == 'running':
                     raise RuntimeError('Wait for the current job to finish.')
-                if self.job.get('id') != identity or not self._recoverable(self.job):
+                if self.job.get('id') != identity or not (self.job.get('can_upscale') or self._recoverable(self.job)):
                     raise ValueError('This job has no valid base image to finish.')
+                if self.job.get('can_upscale'):
+                    self._validate_image(self.image_path(identity), (self.job['base_width'], self.job['base_height']))
                 self.cancel_event.clear()
-                self.job.update(state='running', phase='upscaling', error=None, retryable=False, started=time.time(), finalize_only=True, estimated_seconds=None)
+                elapsed = self.job.get('base_elapsed', 0)
+                self.job.update(state='running', phase='upscaling', error=None, retryable=False,
+                                started=time.time()-elapsed, finalize_only=True, estimated_seconds=None,
+                                progress=None, upscale_error=None, upscale_cancelled=False,
+                                phase_started=time.time(), upscale_pass=1)
+                self.job.pop('error_info', None)
                 self.job.pop('finished',None)
                 self.worker = threading.Thread(target=self._generate, args=('',dict(self.job),[],True), daemon=True)
                 self.worker.start()
@@ -320,7 +328,7 @@ class GenerationManager:
             return {'profile': self.profile, 'diffusion': str(self.model),
                     'encoder': str(self.encoder) if self.encoder else '', 'vae': str(self.vae) if self.vae else '',
                     'vision': str(self.vision) if self.vision else '', 'keep_loaded': self.keep_loaded, 'preload_model': self.preload_model,
-                    'adaptive_weights': self.adaptive_weights, 'prompt_processing':dict(self.enhancer.options),
+                    'adaptive_weights': self.adaptive_weights, 'blur_generation_preview': self.blur_generation_preview, 'prompt_processing':dict(self.enhancer.options),
                     'resolution': self.resolution, 'aspect_ratio':self.aspect_ratio, 'generation_size':self.generation_size, 'model_roots': [str(p) for p in self.library.roots()],
                     'hardware': dict(HARDWARE_DEFAULTS), 'schema_version': 2, 'sd_profile':self.sd_profile,
                     'sd_default':dict(SD_DEFAULT), 'sd_defaults':SD_DEFAULTS, 'sd_custom':dict(self.sd_custom), 'sd_custom_model':dict(self.sd_custom_model)}
@@ -477,6 +485,9 @@ class GenerationManager:
         custom_model = {k:v for k,v in custom_model.items() if k in ('profile','diffusion','encoder','vae','vision') and isinstance(v,str)}
         if custom_model and custom_model.get('profile') not in PROFILES:
             custom_model = {}
+        blur_generation_preview = settings.get('blur_generation_preview', self.blur_generation_preview)
+        if type(blur_generation_preview) is not bool:
+            raise ValueError('Choose whether to blur the generation preview.')
         preload_model = settings.get('preload_model', self.preload_model)
         if type(preload_model) is not bool:
             raise ValueError('Choose whether to preload the selected model on startup.')
@@ -485,7 +496,7 @@ class GenerationManager:
             raise ValueError('Choose whether to enable automatic weight distribution.')
         resolution = settings.get('resolution', self.resolution)
         if not isinstance(resolution, str) or resolution not in RESOLUTIONS:
-            raise ValueError('Select a resolution between 720p and 4K UHD.')
+            raise ValueError('Select an upscaling resolution between 1080p and 4K UHD.')
         aspect_ratio = settings.get('aspect_ratio',self.aspect_ratio)
         generation_size = settings.get('generation_size',self.generation_size)
         if not isinstance(aspect_ratio,str) or aspect_ratio not in ASPECT_RATIOS:
@@ -519,7 +530,7 @@ class GenerationManager:
             if self.closed or self.job['state'] == 'running':
                 raise RuntimeError('Wait for the job to finish before switching models.')
             if persist:
-                saved = {'profile': settings['profile'], 'adaptive_weights': adaptive_weights, 'preload_model': preload_model,
+                saved = {'profile': settings['profile'], 'adaptive_weights': adaptive_weights, 'preload_model': preload_model, 'blur_generation_preview': blur_generation_preview,
                          'resolution': resolution, 'aspect_ratio':aspect_ratio, 'generation_size':generation_size, 'prompt_processing':prompt_processing,
                          'model_roots': [str(p) for p in roots], 'sd_profile':sd_profile, 'sd_custom':sd_custom, 'sd_custom_model':custom_model,
                          **{key: str(value) if value else '' for key, value in paths.items()}}
@@ -533,6 +544,7 @@ class GenerationManager:
             self.sd_custom_model = custom_model
             self.adaptive_weights = adaptive_weights
             self.preload_model = preload_model
+            self.blur_generation_preview = blur_generation_preview
             self.preload_error = None
             self.enhancer.options = prompt_processing
             self.resolution = resolution
@@ -695,7 +707,7 @@ class GenerationManager:
             progress['remaining_seconds'] = max(0,progress['remaining_seconds']-(time.time()-progress['updated']))
         state['progress'] = progress
         state['preview'] = ('/previews/'+state['id']+'.png'
-                            if state.get('state')=='running' and state.get('phase') in ('upscaling','finalizing')
+                            if state.get('state')=='running' and not state.get('can_upscale') and state.get('phase') in ('upscaling','finalizing')
                             else None)
         if state.get('state') == 'running' and state.get('phase') == 'generating':
             base, _ = self._artifact_paths(state)
@@ -706,6 +718,7 @@ class GenerationManager:
             else:
                 state['preview'] = f"/previews/{state['id']}.png?step={revision}"
         state['profile'] = self.profile
+        state['blur_generation_preview'] = self.blur_generation_preview
         state['keep_loaded'] = self.keep_loaded
         state['model_loaded'] = self.resident.loaded()
         state['preload_error'] = self.preload_error
@@ -823,11 +836,7 @@ class GenerationManager:
                 raise FileNotFoundError('Qwen Image 2.1 requires its Qwen3-VL 8B mmproj vision file for references.')
             if not self.executable.is_file() or not os.access(self.executable, os.X_OK):
                 raise FileNotFoundError('The backend has not been built. Run ./build.sh from the project folder.')
-            if not self.upscale_executable.is_file() or not os.access(self.upscale_executable, os.X_OK):
-                raise FileNotFoundError('Upscaling executable missing: backends/upscayl-ncnn/upscayl-bin.')
-            if self.upscale_model.suffix != '.bin':
-                raise ValueError('The NCNN upscaler requires a .bin model and its matching .param file.')
-            for component in (self.model, self.encoder, self.vae, self.upscale_model, self.upscale_model.with_suffix('.param')):
+            for component in (self.model, self.encoder, self.vae):
                 if component is not None and not component.is_file():
                     raise FileNotFoundError(f'Component not found: {component.name}. Check that the SSD is mounted and the model folder is correct.')
             model_catalog.validate(self.profile, {'diffusion':self.model,'encoder':self.encoder,'vae':self.vae,'vision':self.vision if reference_paths else None})
@@ -836,7 +845,6 @@ class GenerationManager:
                 lora=self.library.find_lora(self.profile, self.model)
                 if not lora:
                     raise FileNotFoundError('Profile LoRA missing. Download it from the Models tab.')
-            model_catalog.validate_upscaler(self.upscale_model)
             if self.resident.loaded() and self.resident_policy:
                 policy = self.resident_policy
             else:
@@ -894,6 +902,9 @@ class GenerationManager:
     def _generate(self, prompt, job, reference=None, resume=False):
         base,upscaled = self._artifact_paths(job)
         output = self.image_path(job['id'])
+        preserve_base = bool(resume and job.get('can_upscale'))
+        if preserve_base:
+            base = output
         log = self.logs / (job['id'] + '.log')
         upscale_log = self.logs / (job['id'] + '-upscale.log')
         settings = job['settings']
@@ -995,6 +1006,10 @@ class GenerationManager:
                     # Qwen's extra border (at most 31 px per axis) is not a failed job.
                     finalize(base, base, (native_width, native_height), (base_width, base_height),
                              lambda: self._check_active(deadline), max_crop=31)
+                self._validate_image(base, (base_width, base_height))
+                publish_final(base, output)
+                self._publish(generation_seconds=generation_seconds, base_elapsed=round(time.time()-job['started'],2))
+                return
             crop_box(resized_size, final_size, max_crop)
             intermediate_valid = False
             upscale_validation = None
@@ -1006,6 +1021,8 @@ class GenerationManager:
                     pass
             if not intermediate_valid:
                 self._validate_image(base, (base_width, base_height))
+                if not self.upscale_executable.is_file() or not os.access(self.upscale_executable, os.X_OK):
+                    raise FileNotFoundError('Upscaling executable is missing.')
                 model_catalog.validate_upscaler(upscale_model)
                 self._check_active(deadline)
                 companion, options = _companion_upscaler(self.upscale_executable)
@@ -1049,7 +1066,8 @@ class GenerationManager:
             if (failed_stage == 'generating' or (failed_stage == 'cancelling' and not self.resident.loaded()) or failure.code in {'ram_exhausted', 'process_killed'}
                     or (shared_gpu and failure.code in {'device_lost', 'vram_exhausted'})):
                 self.resident.stop()
-            output.unlink(missing_ok=True)
+            if not preserve_base:
+                output.unlink(missing_ok=True)
         finally:
             try:
                 step_preview.unlink(missing_ok=True)
@@ -1060,9 +1078,18 @@ class GenerationManager:
             with self.lock:
                 self.process = None
                 cancelled = not published and (self.cancel_event.is_set() or self.closed)
-                state = 'cancelled' if cancelled else 'error' if error else 'done'
-                self.job.update(state=state, phase=state, error=None if cancelled else error,
-                                image=None if error or cancelled else '/images/' + job['id'] + '.png', finished=time.time())
+                retained = preserve_base and not published and output.is_file() and not self.closed
+                state = 'done' if retained else 'cancelled' if cancelled else 'error' if error else 'done'
+                can_upscale = state == 'done' and (not resume or retained)
+                image = '/images/' + job['id'] + '.png' if state == 'done' else None
+                if image and not can_upscale:
+                    image += '?v=upscaled'
+                self.job.update(state=state, phase=state, error=None if retained or cancelled else error,
+                                image=image, can_upscale=can_upscale, finished=time.time(),
+                                image_width=base_width if can_upscale else final_size[0],
+                                image_height=base_height if can_upscale else final_size[1],
+                                upscale_error=error if retained and not cancelled else None,
+                                upscale_cancelled=retained and cancelled)
                 if state=='done':
                     self.last_preview_id=job['id']
                 self.job['retryable'] = self._recoverable(self.job)
@@ -1072,7 +1099,8 @@ class GenerationManager:
                 for path in base.parent.glob('qwen-reference-*.png'):
                     path.unlink(missing_ok=True)
                 if state == 'done':
-                    base.unlink(missing_ok=True)
+                    if base != output:
+                        base.unlink(missing_ok=True)
                     upscaled.unlink(missing_ok=True)
                 self._prune_temporary_locked()
 

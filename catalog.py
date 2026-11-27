@@ -1,7 +1,7 @@
 """Single source of profile defaults and output presets for API and UI."""
 import math
 
-RESOLUTIONS = {'720p': (1280,720), '900p': (1600,900), '1080p': (1920,1080),
+RESOLUTIONS = {'1080p': (1920,1080),
                '1440p': (2560,1440), '1800p': (3200,1800), '2160p': (3840,2160)}
 ASPECT_RATIOS = {'16:9':(16,9), '9:16':(9,16), '9:20':(9,20),
                  '1:1':(1,1), '4:3':(4,3), '3:4':(3,4)}

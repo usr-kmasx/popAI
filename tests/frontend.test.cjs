@@ -407,6 +407,57 @@ test('display and download use the exact final backend PNG without canvas conver
  assert.equal(h.query('#save').href,'/images/final.png');assert.equal(h.query('#wallpaper').src,h.query('#save').href);assert.equal(h.query('#save').hidden,false);
  assert.match(h.query('#save').download, /^popAI-[a-z]{6}\.png$/);
 });
+test('decoded PNG can be downloaded and manually upscaled without regeneration',async()=>{
+ const id='c'.repeat(32), dimensions=[960,544], image=`/images/${id}.png`;
+ const job={state:'done',id,image,width:1920,height:1080,image_width:960,image_height:544,can_upscale:true};
+ const h=harness(job,dimensions);await tick();
+ const button=h.query('#retry-finalize'), cancel=h.query('#cancel-generation');
+ assert.equal(h.query('#wallpaper').hidden,false);
+ assert.equal(h.query('#save').href,image);
+ assert.equal(button.hidden,false);
+ assert.equal(button.textContent,'Upscale');
+ assert.equal(cancel.hidden,true);
+ await button.events.click();
+ assert.equal(button.hidden,true);
+ assert.equal(cancel.hidden,false);
+ assert.equal(h.calls.at(-1).path,`/api/jobs/${id}/retry-finalize`);
+ assert.equal(h.calls.some(c=>c.path==='/api/generate'),false);
+ Object.assign(job,{state:'running',phase:'upscaling'});
+ await h.timers.shift()();
+ assert.equal(h.query('#wallpaper').hidden,false);
+ assert.equal(h.query('#save').href,image);
+ assert.equal(h.query('#generation-preview').hidden,true);
+ Object.assign(job,{state:'done',phase:'done',upscale_cancelled:true});
+ await h.timers.shift()();
+ assert.equal(button.hidden,false);
+ assert.match(h.query('#status').textContent,/Upscale canceled/);
+ await button.events.click();
+ dimensions[0]=1920;dimensions[1]=1080;
+ Object.assign(job,{state:'done',phase:'done',can_upscale:false,upscale_cancelled:false,image:image+'?v=upscaled',image_width:1920,image_height:1080});
+ await h.timers.shift()();await tick();
+ assert.equal(h.query('#save').href,job.image);
+ assert.equal(h.query('#wallpaper').src,job.image);
+ assert.equal(button.hidden,true);
+ assert.equal(cancel.hidden,true);
+});
+test('small images cover the viewport without changing their aspect ratio or download',async()=>{
+ const id='f'.repeat(32),image=`/images/${id}.png`;
+ const h=harness({state:'done',id,image,image_width:256,image_height:144,can_upscale:true},[256,144],false,39,new Map(),new Map(),({query})=>{
+   Object.assign(query('#image-viewport'),{clientWidth:1366,clientHeight:768});
+ });
+ await tick();
+ let result=h.query('#wallpaper');
+ assert.equal(result.hidden,false);
+ assert.equal(parseFloat(result.style.width),1366);
+ assert.ok(parseFloat(result.style.height)>=768);
+ assert.ok(Math.abs(parseFloat(result.style.width)/parseFloat(result.style.height)-256/144)<1e-9);
+ assert.equal(h.query('#save').href,image);
+ Object.assign(h.query('#image-viewport'),{clientWidth:390,clientHeight:844});
+ vm.runInContext('resizeImageView()',h.context);
+ assert.equal(parseFloat(result.style.height),844);
+ assert.ok(parseFloat(result.style.width)>=390);
+ assert.ok(Math.abs(parseFloat(result.style.width)/parseFloat(result.style.height)-256/144)<1e-9);
+});
 test('wrong final resolution is rejected',async()=>{
  const h=await completedHarness({state:'done',id:'wrong',image:'/images/wrong.png'},[768,448]);await tick();assert.equal(h.query('#save').hidden,true);assert.equal(h.query('#prompt').disabled,false);
 });
@@ -595,4 +646,26 @@ test('startup preload switch belongs to generation profile and follows busy stat
  assert.equal(h.query('#preload-model').disabled,true);
  run('setBusy(false)');
  assert.equal(h.query('#preload-model').disabled,false);
+});
+
+test('generation preview blur follows the saved setting and leaves the preview available',async()=>{
+ const html=fs.readFileSync('web/index.html','utf8');
+ assert.match(html,/id="blur-generation-preview" type="checkbox" checked/);
+ assert.ok(html.indexOf('id="blur-generation-preview"')<html.indexOf('id="prompt-processing-card"'));
+ const css=fs.readFileSync('web/style.css','utf8');
+ assert.match(css,/#generation-preview\.unblurred img\{[^}]*filter:none;[^}]*animation:none/);
+ assert.match(css,/#generation-preview\.unblurred::before,#generation-preview\.unblurred::after\{display:none/);
+ const job={state:'idle',blur_generation_preview:false};
+ const h=harness(job);let unblurred;
+ h.query('#generation-preview').classList.toggle=(name,value)=>{if(name==='unblurred')unblurred=value;};
+ await tick();
+ assert.equal(unblurred,true);
+ job.blur_generation_preview=true;
+ await h.timers.shift()();
+ assert.equal(unblurred,false);
+ const run=code=>vm.runInContext(code,h.context);
+ run('setBusy(true)');
+ assert.equal(h.query('#blur-generation-preview').disabled,true);
+ run('setBusy(false)');
+ assert.equal(h.query('#blur-generation-preview').disabled,false);
 });

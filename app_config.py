@@ -75,6 +75,8 @@ class SettingsStore:
                 backup.write_bytes(self.path.read_bytes())
             self.save(data)
         result = copy.deepcopy(data)
+        if result.get('resolution') in ('720p', '900p'):
+            result['resolution'] = '1080p'
         result['model_roots'] = [str(p) for p in normalize_roots(data.get('model_roots', ['models']), self.root)]
         for key in COMPONENTS:
             if result.get(key):

@@ -142,14 +142,27 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
         self.assertEqual(environment['GGML_VK_MAX_NODES_PER_SUBMIT'], '4')
         self.assertEqual(environment['GGML_VK_SERIALIZE_SUBMISSIONS'], '1')
         output = self.manager.image_path(state['id'])
+        self.assertTrue(state['can_upscale'])
+        self.assertEqual((state['image_width'],state['image_height']),(960,544))
+        self.assertEqual(struct.unpack('>II', output.read_bytes()[16:24]), (960, 544))
+        self.assertEqual(len(self.executable.with_suffix('.calls').read_text().splitlines()), 1)
+        self.assertFalse(self.executable.with_suffix('.upscale-args').exists())
+        self.manager.retry_finalize(state['id'])
+        state = self.wait_job()
+        self.assertEqual(state['state'],'done',state.get('upscale_error'))
+        self.assertFalse(state['can_upscale'])
+        self.assertEqual((state['image_width'],state['image_height']),(1920,1080))
+        self.assertTrue(state['image'].endswith('?v=upscaled'))
         self.assertEqual(struct.unpack('>II', output.read_bytes()[16:24]), (1920, 1080))
+        with self.assertRaises(ValueError):
+            self.manager.retry_finalize(state['id'])
         up_args = json.loads(self.executable.with_suffix('.upscale-args').read_text())
         self.assertEqual(up_args[up_args.index('-m')+1], str(self.upscaler.parent))
         self.assertEqual(up_args[up_args.index('-n')+1], self.upscaler.stem)
         self.assertNotIn('--diffusion-model', up_args)
         self.assertNotIn('--llm', up_args)
         self.assertNotIn('--vae', up_args)
-        self.assertEqual(up_args[up_args.index('-i')+1], args[args.index('-o')+1])
+        self.assertEqual(up_args[up_args.index('-i')+1], str(output))
         self.assertEqual(len(self.executable.with_suffix('.calls').read_text().splitlines()), 2)
 
     def test_startup_preload_is_optional_persisted_and_reuses_resident_command(self):
@@ -190,6 +203,21 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
         with self.assertRaises(ValueError):
             self.manager.configure({**settings,'preload_model':'true'},persist=True,allow_missing=True)
         self.assertTrue(self.manager.store.load()['preload_model'])
+
+    def test_generation_preview_blur_persists_without_reloading_model(self):
+        self.assertTrue(self.manager.model_settings()['blur_generation_preview'])
+        settings=self.manager.model_settings()
+        with patch.object(self.manager.resident,'stop') as stop:
+            for value in (False,True,False):
+                self.manager.configure({**settings,'blur_generation_preview':value},persist=True,allow_missing=True)
+                self.assertIs(self.manager.status()['blur_generation_preview'],value)
+                self.assertIs(self.manager.store.load()['blur_generation_preview'],value)
+            stop.assert_not_called()
+        self.manager.configure(self.manager.store.load(),allow_missing=True)
+        self.assertFalse(self.manager.model_settings()['blur_generation_preview'])
+        with self.assertRaises(ValueError):
+            self.manager.configure({**settings,'blur_generation_preview':'false'},persist=True,allow_missing=True)
+        self.assertFalse(self.manager.store.load()['blur_generation_preview'])
 
     def test_prompt_processing_persists_and_rejects_invalid_values(self):
         expected = {'corrector':False,'enhancer':True,'lite':True}
@@ -513,6 +541,10 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
                       if call.args[0] == call.args[1]]
         self.assertTrue(any(args[2:4] == ((768,448),(768,432)) for args in crop_calls))
         final = self.manager.image_path(job['id'])
+        self.assertEqual(struct.unpack('>II',final.read_bytes()[16:24]),(768,432))
+        self.manager.retry_finalize(job['id'])
+        job = self.wait_job()
+        self.assertFalse(job['can_upscale'],job.get('upscale_error'))
         self.assertEqual(struct.unpack('>II',final.read_bytes()[16:24]),(1920,1080))
 
     def test_zimage_presets_keep_the_requested_seed_and_use_their_own_schedule(self):
@@ -714,24 +746,48 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
         self.assertEqual(self.wait_job()['state'], 'error')
         self.assertFalse(self.executable.with_suffix('.upscale-args').exists())
 
-    def test_upscale_failure_and_wrong_dimensions_are_not_success(self):
+    def test_upscale_failure_preserves_original_and_allows_retry(self):
         for prompt in ('fail_upscale', 'unscaled_upscale'):
             self.manager.start(prompt)
             state = self.wait_job()
-            self.assertEqual(state['state'], 'error')
-            self.assertIsNone(state['image'])
-            self.assertTrue((self.manager.workspace/'jobs'/state['id']/'base.png').exists())
+            original = self.manager.asset_bytes(state['id'])
+            self.assertTrue(state['can_upscale'])
+            self.manager.retry_finalize(state['id'])
+            state = self.wait_job()
+            self.assertEqual(state['state'], 'done')
+            self.assertTrue(state['can_upscale'])
+            self.assertTrue(state['upscale_error'])
+            self.assertEqual(self.manager.asset_bytes(state['id']),original)
 
-    def test_upscale_phase_remains_busy_and_close_stops_it(self):
+    def test_upscale_cancel_preserves_original(self):
         self.manager.start('slow_upscale')
+        state = self.wait_job()
+        original = self.manager.asset_bytes(state['id'])
+        self.manager.retry_finalize(state['id'])
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
-            if self.manager.status().get('phase') == 'upscaling' and self.executable.with_suffix('.upscale-args').exists():
+            if self.executable.with_suffix('.upscale-args').exists():
                 break
             time.sleep(0.02)
         self.assertEqual(self.manager.status().get('phase'), 'upscaling')
         with self.assertRaises(RuntimeError):
             self.manager.start('second')
+        with self.assertRaises(RuntimeError):
+            self.manager.retry_finalize(state['id'])
+        result = self.manager.cancel()
+        self.assertEqual(result['state'], 'done')
+        self.assertTrue(result['can_upscale'])
+        self.assertTrue(result['upscale_cancelled'])
+        self.assertEqual(self.manager.asset_bytes(state['id']),original)
+        self.manager.retry_finalize(state['id'])
+        result = self.wait_job()
+        self.assertFalse(result['can_upscale'],result.get('upscale_error'))
+
+    def test_upscale_phase_remains_busy_and_close_stops_it(self):
+        self.manager.start('slow_upscale')
+        state = self.wait_job()
+        self.manager.retry_finalize(state['id'])
+        self.assertEqual(self.manager.status().get('phase'), 'upscaling')
         self.manager.close()
         self.assertEqual(self.manager.status()['state'], 'cancelled')
 
@@ -777,11 +833,35 @@ out.write_bytes(png if prompt != 'invalid' else b'broken')
             self.assertEqual(self.manager.status()['state'], 'idle')
             component.touch()
 
-    def test_missing_upscaler_is_reported_before_job(self):
+    def test_upscale_resolutions_and_legacy_settings(self):
+        from catalog import RESOLUTIONS, image_geometry
+        self.assertEqual(list(RESOLUTIONS),['1080p','1440p','1800p','2160p'])
+        settings=self.manager.model_settings()
+        for legacy in ('720p','900p'):
+            self.manager.store.save({**settings,'resolution':legacy})
+            loaded=self.manager.store.load()
+            self.assertEqual(loaded['resolution'],'1080p')
+            self.assertEqual(loaded['profile'],settings['profile'])
+            self.manager.configure(loaded,allow_missing=True)
+            with self.assertRaises(ValueError):
+                self.manager.configure({**settings,'resolution':legacy})
+            with self.assertRaises(ValueError):
+                image_geometry(legacy)
+        catalog=self.manager.model_catalog()
+        for options in catalog['resolution_options'].values():
+            self.assertEqual(list(options),list(RESOLUTIONS))
+
+    def test_missing_upscaler_does_not_block_base_generation(self):
         self.upscaler.unlink()
-        with self.assertRaisesRegex(FileNotFoundError, self.upscaler.name):
-            self.manager.start('landscape')
-        self.assertEqual(self.manager.status()['state'], 'idle')
+        self.manager.start('landscape')
+        state = self.wait_job()
+        self.assertTrue(state['can_upscale'])
+        original = self.manager.asset_bytes(state['id'])
+        self.manager.retry_finalize(state['id'])
+        state = self.wait_job()
+        self.assertTrue(state['can_upscale'])
+        self.assertTrue(state['upscale_error'])
+        self.assertEqual(self.manager.asset_bytes(state['id']),original)
 
     def test_zimage_rejects_editing_and_next_text_request_still_works(self):
         saved = self.manager.store_reference(reference_png())
@@ -1115,6 +1195,14 @@ server.main()
             state = self.wait_job()
             with urllib.request.urlopen(base + state['image']) as response:
                 self.assertEqual(response.headers['Content-Type'], 'image/png')
+                self.assertEqual(struct.unpack('>II',response.read()[16:24]),(960,544))
+            request = urllib.request.Request(base+'/api/jobs/'+state['id']+'/retry-finalize',data=b'',method='POST')
+            with urllib.request.urlopen(request) as response:
+                self.assertEqual(response.status,202)
+            state = self.wait_job()
+            self.assertFalse(state['can_upscale'],state.get('upscale_error'))
+            with urllib.request.urlopen(base+state['image']) as response:
+                self.assertEqual(struct.unpack('>II',response.read()[16:24]),(1920,1080))
             for path in ('/images/../../server.py', '/images/unknown.png', '/server.py'):
                 with self.assertRaises(urllib.error.HTTPError) as result:
                     urllib.request.urlopen(base + path)

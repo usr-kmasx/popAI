@@ -152,6 +152,11 @@ function resetImageView() {
 function resizeImageView() {
   const w=imageViewport.clientWidth,h=imageViewport.clientHeight;
   if (!(w>0 && h>0)) return;
+  if (!wallpaper.hidden && wallpaper.naturalWidth>0 && wallpaper.naturalHeight>0) {
+    const scale=Math.max(w/wallpaper.naturalWidth,h/wallpaper.naturalHeight);
+    wallpaper.style.width=`${wallpaper.naturalWidth*scale}px`;
+    wallpaper.style.height=`${wallpaper.naturalHeight*scale}px`;
+  }
   if (imageViewSize && !wallpaper.hidden) {
     imageView.x *= w/imageViewSize.w;
     imageView.y *= h/imageViewSize.h;
@@ -231,6 +236,7 @@ const generationSize = document.querySelector('#generation-size');
 const outputResolution = document.querySelector('#output-resolution');
 const adaptiveWeights = document.querySelector('#adaptive-weights');
 const preloadModel = document.querySelector('#preload-model');
+const blurGenerationPreview = document.querySelector('#blur-generation-preview');
 const processingCard=document.querySelector('#prompt-processing-card');
 const processingToggle=document.querySelector('#prompt-processing-toggle');
 const processingOptions=document.querySelector('#prompt-processing-options');
@@ -461,12 +467,17 @@ let discardJobId = null;
 let rememberedResult = null;
 let resultError = null;
 let recoverableJob = null;
+let shownImage = null;
 const retryFinalize = document.querySelector('#retry-finalize');
 retryFinalize.addEventListener('click', async () => {
   if (busy || !recoverableJob) return;
+  const identity = recoverableJob;
   setBusy(true);
-  try { await request(`/api/jobs/${recoverableJob}/retry-finalize`, {method:'POST'}); }
-  catch (error) { status.textContent = error.message; setBusy(false); }
+  status.textContent = 'Starting upscale…';
+  try {
+    const job = await request(`/api/jobs/${identity}/retry-finalize`, {method:'POST'});
+    if (job.state === 'running') syncClock(job);
+  } catch (error) { showPromptNotice(error.message); setBusy(false); }
 });
 
 function formatDuration(elapsed) {
@@ -494,6 +505,7 @@ function setBusy(value = running) {
   Object.values(sdInputs).forEach(input => { input.disabled = busy; });
   adjustConfig.disabled = busy;
   retryFinalize.disabled = busy;
+  retryFinalize.hidden = busy || !recoverableJob;
   prompt.disabled = busy;
   addReference.disabled = busy || currentFamily === 'z-image-turbo';
   drawReference.hidden = currentFamily === 'z-image-turbo';
@@ -507,6 +519,7 @@ function setBusy(value = running) {
   for(const input of Object.values(processingInputs))input.disabled=busy || !processingSupported;
   modelProfile.disabled = busy;
   preloadModel.disabled = busy;
+  blurGenerationPreview.disabled = busy;
   for (const card of profileCards) card.querySelector('.profile-card-toggle').disabled = busy;
   for (const label of profilePresetLabels) label.querySelector('input').disabled = busy;
   profileCustomButton.disabled = busy;
@@ -924,7 +937,7 @@ function restoreComposerSession() {
     const result = saved.result;
     if (typeof result?.id === 'string' && assetId.test(result.id) && result.id !== hiddenImageId &&
         Number.isInteger(result.width) && result.width > 0 && Number.isInteger(result.height) && result.height > 0) {
-      rememberedResult = {id: result.id, width: result.width, height: result.height};
+      rememberedResult = {id: result.id, width: result.width, height: result.height, upscaled:result.upscaled === true};
     }
   } catch {}
   renderReferences();
@@ -1191,6 +1204,7 @@ async function openConfig(tab = 'general') {
     outputResolution.value = catalog.selected.resolution || '1080p';
     adaptiveWeights.checked = Boolean(catalog.selected.adaptive_weights);
     preloadModel.checked = catalog.selected.preload_model===true;
+    blurGenerationPreview.checked = catalog.selected.blur_generation_preview!==false;
     acceptProcessingSettings(catalog.selected.prompt_processing);
     fillProcessingSettings(processingSettings);
     modelStatus.textContent = [!processingSupported?processingRestartNotice:'',...catalog.errors].filter(Boolean).join(' · ');
@@ -1213,7 +1227,7 @@ cancelGeneration.addEventListener('click', async () => {
     const canceled = await request('/api/cancel', {method:'POST'});
     running = false;
     clockJob = null;
-    status.textContent = canceled.model_loaded?'Generation canceled · Model ready':'Generation canceled · Engine unloaded';
+    status.textContent = canceled.can_upscale?'Upscale canceled · Original image ready':canceled.model_loaded?'Generation canceled · Model ready':'Generation canceled · Engine unloaded';
   } catch (error) { status.textContent = error.message; }
   finally { stopping = false; setBusy(); }
 });
@@ -1229,9 +1243,10 @@ modelApply.addEventListener('click', async () => {
       customDraft = readSd();
       customModel = {profile:activeFamily,...Object.fromEntries(['diffusion','encoder','vae','vision'].map(key => [key,modelSlots[key].value]))};
     }
-    const settings = {preload_model:preloadModel.checked,prompt_processing:processingDraft(),model_roots:modelRootPaths, profile:activeFamily, sd_custom_model:customModel, sd_profile:modelProfile.value, sd_custom:customDraft, adaptive_weights:adaptiveWeights.checked, resolution:outputResolution.value, aspect_ratio:outputAspect.value, generation_size:generationSize.value, ...Object.fromEntries(Object.entries(modelSlots).map(([key, select]) => [key,select.value]))};
+    const settings = {preload_model:preloadModel.checked,blur_generation_preview:blurGenerationPreview.checked,prompt_processing:processingDraft(),model_roots:modelRootPaths, profile:activeFamily, sd_custom_model:customModel, sd_profile:modelProfile.value, sd_custom:customDraft, adaptive_weights:adaptiveWeights.checked, resolution:outputResolution.value, aspect_ratio:outputAspect.value, generation_size:generationSize.value, ...Object.fromEntries(Object.entries(modelSlots).map(([key, select]) => [key,select.value]))};
     const saved = await request('/api/models', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(settings)});
     acceptProcessingSettings(saved.prompt_processing);
+    generationPreview.classList.toggle('unblurred',saved.blur_generation_preview===false);
     if(!processingSupported)throw new Error(processingRestartNotice);
     activeFamily = saved.profile;
     modelsReady = true;
@@ -1451,6 +1466,7 @@ function clearResult() {
     wallpaper.hidden = save.hidden = true;
     imageViewport.classList.remove('has-image');
     shown = null;
+    shownImage = null;
     rememberedResult = null;
     saveComposerSession();
   }
@@ -1467,6 +1483,8 @@ newGeneration.addEventListener('click', () => {
     discardJobId = identity;
     discardJob(identity);
   }
+  recoverableJob = null;
+  retryFinalize.hidden = true;
   clearGenerationPreview();
   clearResult();
   resultError = null;
@@ -1480,8 +1498,8 @@ newGeneration.addEventListener('click', () => {
 
 async function showResult(job, announce = true) {
   const epoch = previewEpoch;
-  const width = job.width || 1920;
-  const height = job.height || 1080;
+  const width = job.image_width || job.width || 1920;
+  const height = job.image_height || job.height || 1080;
   const image = new Image();
   image.src = job.image;
   await image.decode();
@@ -1508,7 +1526,8 @@ async function showResult(job, announce = true) {
   save.setAttribute('aria-label',`Download image, ${width} by ${height} pixels`);
   save.hidden = false;
   shown = job.id;
-  rememberedResult = {id: job.id, width, height};
+  shownImage = job.image;
+  rememberedResult = {id: job.id, width, height, upscaled:job.image.endsWith('?v=upscaled')};
   saveComposerSession();
   if (announce) playCompletionSound(job.id);
   return true;
@@ -1530,8 +1549,9 @@ async function refresh() {
     if(discardedReferences.size)releaseReferences([]);
     enhancerState=job.enhancer || {state:'stopped'};
     acceptProcessingSettings(enhancerState.options);
+    generationPreview.classList.toggle('unblurred',job.blur_generation_preview===false);
     modelsReady=job.models_ready!==false;
-    const jobKey=JSON.stringify([job.id || null,job.state]);
+    const jobKey=JSON.stringify([job.id || null,job.state,job.image || null]);
     if(jobKey!==observedJobKey || job.state==='running')promptNotice=null;
     observedJobKey=jobKey;
     reconcileReferences(job.missing_references);
@@ -1542,18 +1562,18 @@ async function refresh() {
       if (currentJobId === discardJobId && job.state !== 'running') discardJob(discardJobId);
       else if (currentJobId !== discardJobId) discardJobId=null;
     }
-    latestImageId = job.state === 'done' && job.image ? job.id : null;
+    latestImageId = (job.state === 'done' || job.can_upscale) && job.image ? job.id : null;
     stage.classList.remove('error');
     syncClock(job);
     currentFamily = job.profile || currentFamily;
+    recoverableJob = job.state !== 'running' && job.id !== hiddenImageId && (job.can_upscale || job.retryable) ? job.id : null;
+    retryFinalize.textContent = job.can_upscale ? 'Upscale' : 'Finish image';
     setBusy(job.state === 'running');
     adjustConfig.hidden = !(job.config_error || job.state === 'error' && job.error_info?.action === 'settings');
-    recoverableJob = job.retryable ? job.id : null;
-    retryFinalize.hidden = !recoverableJob;
     if (initialStatus && !latestImageId && !job.preview && rememberedResult) {
       try {
         const result = rememberedResult;
-        if (!await showResult({...result, image: `/images/${result.id}.png`}, false)) return;
+        if (!await showResult({...result, image: `/images/${result.id}.png${result.upscaled?'?v=upscaled':''}`}, false)) return;
       } catch {
         rememberedResult = null;
         saveComposerSession();
@@ -1561,12 +1581,16 @@ async function refresh() {
     }
     if (job.config_error && job.state === 'idle') status.textContent = job.config_error;
     if (job.state === 'running') {
-      showGenerationPreview(job);
+      if (job.can_upscale && job.image) {
+        if (shown !== job.id || shownImage !== job.image) {
+          try { await showResult(job, false); } catch {}
+        }
+      } else showGenerationPreview(job);
     } else if (job.state === 'done' && (!job.image || job.id === hiddenImageId)) {
       clearGenerationPreview();
       status.textContent = 'Enter a prompt and press Enter';
     } else if (job.state === 'done') {
-      if (shown !== job.id) {
+      if (shown !== job.id || shownImage !== job.image) {
         try {
           if (!await showResult(job, !initialStatus)) return;
           resultError = null;
@@ -1582,7 +1606,7 @@ async function refresh() {
         stage.classList.add('error');
         status.textContent = resultError;
       } else {
-        status.textContent = `Ready · Total ${formatDuration(job.elapsed)}`;
+        status.textContent = job.upscale_error ? job.upscale_error : job.upscale_cancelled ? 'Upscale canceled · Original image ready' : `Ready · Total ${formatDuration(job.elapsed)}`;
       }
     } else if (job.state === 'error') {
       clearGenerationPreview();
