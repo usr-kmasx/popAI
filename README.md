@@ -121,16 +121,15 @@ GPU or unavailable upstream download cannot be fixed automatically.
    last option) restores the prior wording when available. The **Dramatic**
    enhancer uses the local Qwen3.5-4B HauhauCS Aggressive Q8_0 with sampling
    temperature `0.3` and a specific dark semi-realistic anime wallpaper art-direction prompt.
-   With both stages enabled, all four modes first run a private corrector (`prompt-corrector.txt`) that
+   All four modes first run a private corrector (`prompt-corrector.txt`) that
    interprets the original description, resolves ambiguity without artistic additions,
    and translates it into en-US while preserving requested literal image text.
    The selected enhancer then receives only the corrected English paragraph.
-   When both stages are enabled, the independent completion requests use the same loaded Vulkan model,
+   The independent completion requests use the same loaded Vulkan model,
    with 8,192 context tokens and a 1,024-token reasoning budget per stage,
    using Q4_0 key/value caches and Flash Attention. Settings → Generation
-   → Prompt processing allows disabling either stage independently. With only
-   Corrector enabled, clicking the wand corrects directly; with Enhancer enabled,
-   select a mode from the menu. With both disabled, only Undo remains if available.
+   → Prompt processing allows turning thinking on or off independently for each stage.
+   Both stages run in every mode, even when thinking is disabled.
    Save the settings to apply them. Lite mode
    uses 4,096 context tokens with 512/192 reasoning budgets for Corrector/Enhancer.
    Both modes retain Q4_0 caches and Flash Attention,

@@ -531,19 +531,18 @@ test('prompt processing card expands independently and supports three persisted 
  assert.equal(h.query('#prompt-processing-summary').textContent,'Lite');
  h.query('#prompt').value='A cat';
  assert.equal(run('canImprovePrompt()'),true);
- assert.equal(h.query('#enhance-prompt').title,'Correct prompt');
- assert.equal(run("allowedPromptMode('cinematic')"),false);
- assert.equal(run("allowedPromptMode('corrector')"),true);
- await run("improvePrompt('cinematic')");
- assert.equal(h.calls.filter(c=>c.path==='/api/enhance').length,0);
+ vm.runInContext('setBusy()',h.context);
+ assert.equal(h.query('#enhance-prompt').title,'Enhance prompt');
+ assert.equal(run("allowedPromptMode('cinematic')"),true);
+ assert.equal(run("allowedPromptMode('corrector')"),false);
  h.query('#prompt-corrector-enabled').checked=false;
  h.query('#prompt-corrector-enabled').events.change();
- assert.equal(h.query('#prompt-processing-summary').textContent,'Off');
+ assert.equal(h.query('#prompt-processing-summary').textContent,'Lite');
  assert.equal(run('processingDraft().corrector'),false);
  job.enhancer.options={corrector:false,enhancer:false,lite:true};
  await h.timers.shift()();
- assert.equal(run('canImprovePrompt()'),false);
- assert.equal(h.query('#enhance-control').hidden,true);
+ assert.equal(run('canImprovePrompt()'),true);
+ assert.equal(h.query('#enhance-control').hidden,false);
  h.query('#prompt-processing-toggle').events.click();
  assert.equal(panel.hidden,true);
 });
@@ -560,7 +559,7 @@ test('stale server cannot expose or execute prompt processing modes',async()=>{
  assert.equal(h.calls.filter(c=>c.path==='/api/enhance').length,0);
 });
 
-test('wand corrects directly only with corrector alone; enhancer requires mode selection',async()=>{
+test('wand offers every enhancer mode regardless of thinking settings',async()=>{
  for(const [corrector,enhancer] of [[true,false],[true,true],[false,true],[false,false]]){
   const modes=[];
   const h=harness({state:'idle',enhancer:{state:'stopped',options:{corrector,enhancer,lite:false}}},undefined,false,39,new Map(),new Map(),({query,element})=>{
@@ -574,19 +573,15 @@ test('wand corrects directly only with corrector alone; enhancer requires mode s
   h.query('#prompt').value='A cat';
   vm.runInContext('setBusy()',h.context);
   const wand=h.query('#enhance-prompt'),menu=h.query('#enhance-options');
-  assert.ok(modes.every(b=>b.hidden===!enhancer));
+  assert.ok(modes.every(b=>!b.hidden&&!b.disabled));
   h.query('#enhance-control').events.pointerenter({pointerType:'mouse'});
-  assert.equal(menu.hidden,!enhancer);
+  assert.equal(menu.hidden,false);
   await wand.events.click();
-  const calls=h.calls.filter(c=>c.path==='/api/enhance');
-  assert.equal(calls.length,corrector&&!enhancer?1:0);
-  if(calls.length)assert.equal(JSON.parse(calls[0].options.body).mode,'corrector');
-  else assert.equal(menu.hidden,!enhancer);
-  if(enhancer){
-    assert.equal(vm.runInContext("allowedPromptMode('corrector')",h.context),false);
-    await vm.runInContext("improvePrompt('corrector')",h.context);
-    assert.equal(h.calls.filter(c=>c.path==='/api/enhance').length,0);
-  }
+  assert.equal(h.calls.filter(c=>c.path==='/api/enhance').length,0);
+  assert.equal(menu.hidden,false);
+  assert.equal(vm.runInContext("allowedPromptMode('corrector')",h.context),false);
+  await vm.runInContext("improvePrompt('corrector')",h.context);
+  assert.equal(h.calls.filter(c=>c.path==='/api/enhance').length,0);
  }
 });
 

@@ -50,7 +50,7 @@ class FakeConnection:
         if self.responses:
             return self.responses.pop(0)
         system = self.body['messages'][0]['content']
-        if 'private prompt corrector' in system:
+        if system == (Path(__file__).resolve().parents[1] / 'prompt-corrector.txt').read_text(encoding='utf-8'):
             return FakeResponse(self.corrected)
         return FakeResponse()
 
@@ -123,11 +123,13 @@ class PromptEnhancerModeTests(unittest.TestCase):
 
     def test_corrector_rules_preserve_intent_and_literal_image_text(self):
         rules = self.enhancer.corrector_system
-        for phrase in ('American English (en-US)', 'Do not embellish',
-                       'left from right', 'everything else remains unchanged',
-                       'do not translate that literal image text',
-                       'No headings, bullets'):
+        for phrase in ('natural American English', 'without changing the intended scene',
+                       'every explicit detail', 'stay faithful to the original wording',
+                       'preserve everything else', 'literal text intended to appear in the image',
+                       'Do not add visual details or artistic improvements',
+                       'Return only the corrected English paragraph'):
             self.assertIn(phrase, rules)
+        self.assertEqual(len(rules.strip().splitlines()), 1)
 
     def test_reference_edit_preserves_edit_scope(self):
         original = 'muda só o fundo pra azul'
@@ -304,39 +306,32 @@ class PromptEnhancerModeTests(unittest.TestCase):
             list(self.enhancer.stream('image', mode='unknown'))
 
 
-    def test_independent_stages_and_lite_mode(self):
+    def test_independent_thinking_and_lite_mode(self):
         for lite in (False, True):
-            for corrector, enhancer in ((True,True),(True,False),(False,True)):
+            for corrector, enhancer in ((True,True),(True,False),(False,True),(False,False)):
                 with self.subTest(lite=lite,corrector=corrector,enhancer=enhancer):
                     self.enhancer.options = dict(corrector=corrector,enhancer=enhancer,lite=lite)
                     FakeConnection.requests.clear()
-                    events = self.run_prompt('Original input.',mode='cinematic' if enhancer else 'corrector')
-                    expected = (['corrector'] if corrector else []) + (['enhancer'] if enhancer else [])
-                    self.assertEqual([e['stage'] for e in events if 'stage' in e],expected)
-                    self.assertEqual(len(FakeConnection.requests),len(expected))
+                    events = self.run_prompt('Original input.',mode='cinematic')
+                    self.assertEqual([e['stage'] for e in events if 'stage' in e],['corrector','enhancer'])
+                    self.assertEqual(len(FakeConnection.requests),2)
                     self.assertEqual(self.enhancer.context_size,4096 if lite else 8192)
                     self.assertEqual([r[2]['reasoning_budget_tokens'] for r in FakeConnection.requests],
-                        ([512 if lite else 1024] if corrector else [])+([192 if lite else 1024] if enhancer else []))
-                    if enhancer and not corrector:
-                        self.assertIn('Original input.',FakeConnection.requests[0][2]['messages'][1]['content'])
-                    self.assertEqual([e['text'] for e in events if 'text' in e],
-                        ['A cinematic illustration.' if enhancer else FakeConnection.corrected])
-        self.enhancer.options = dict(corrector=True,enhancer=False,lite=False)
-        for mode in ENHANCER_MODES:
-            FakeConnection.requests.clear()
-            with patch.object(self.enhancer,'start') as start:
-                with self.assertRaisesRegex(ValueError,'Enhancer is disabled'):
-                    list(self.enhancer.stream('Original input.',mode=mode))
-            start.assert_not_called()
-            self.assertFalse(FakeConnection.requests)
-        self.enhancer.options = dict(corrector=False,enhancer=False,lite=True)
-        FakeConnection.requests.clear()
-        with patch.object(self.enhancer,'start') as start:
-            with self.assertRaisesRegex(ValueError,'Enable Corrector or Enhancer'):
-                list(self.enhancer.stream('Original input.'))
-        start.assert_not_called()
-        self.assertFalse(FakeConnection.requests)
-        self.assertFalse(self.enhancer.busy)
+                        [(512 if lite else 1024) if corrector else 0,
+                         (192 if lite else 1024) if enhancer else 0])
+                    self.assertIn('Original input.',FakeConnection.requests[0][2]['messages'][1]['content'])
+                    self.assertIn(FakeConnection.corrected,FakeConnection.requests[1][2]['messages'][1]['content'])
+                    self.assertEqual([e['text'] for e in events if 'text' in e],['A cinematic illustration.'])
+
+    def test_completion_has_no_time_limit(self):
+        with patch.object(self.enhancer, 'status', return_value={'state': 'ready'}):
+            with patch('prompt_enhancer.http.client.HTTPConnection', side_effect=FakeConnection) as connection:
+                with patch('prompt_enhancer.time.monotonic', side_effect=range(0,100000,180)):
+                    events = list(self.enhancer.stream('A cat.',mode='simple'))
+                self.assertEqual(events[-1]['state'],'done')
+                self.assertEqual(connection.call_count,2)
+                for call in connection.call_args_list:
+                    self.assertIsNone(call.kwargs['timeout'])
 
 if __name__ == '__main__':
     unittest.main()

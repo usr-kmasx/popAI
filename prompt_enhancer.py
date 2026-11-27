@@ -79,11 +79,11 @@ class PromptEnhancer:
 
     @property
     def corrector_budget(self):
-        return LITE_CORRECTOR_REASONING_BUDGET if self.options['lite'] else CORRECTOR_REASONING_BUDGET
+        return (LITE_CORRECTOR_REASONING_BUDGET if self.options['lite'] else CORRECTOR_REASONING_BUDGET) if self.options['corrector'] else 0
 
     @property
     def enhancer_budget(self):
-        return LITE_REASONING_BUDGET if self.options['lite'] else REASONING_BUDGET
+        return (LITE_REASONING_BUDGET if self.options['lite'] else REASONING_BUDGET) if self.options['enhancer'] else 0
 
     def status(self):
         with self.lock:
@@ -190,7 +190,7 @@ class PromptEnhancer:
         thought_written = 0
         started = time.monotonic()
         last_heartbeat = started
-        connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=120)
+        connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=None)
         try:
             connection.request('POST', '/v1/chat/completions',
                                body=json.dumps(body).encode('utf-8'),
@@ -206,8 +206,6 @@ class PromptEnhancer:
             for raw in response:
                 self._check_cancel()
                 now = time.monotonic()
-                if now - started > 120:
-                    raise RuntimeError('Prompt enhancement timed out.')
                 line = raw.decode('utf-8').strip()
                 if line.startswith('data:'):
                     data = line[5:].strip()
@@ -256,7 +254,7 @@ class PromptEnhancer:
         if not isinstance(prompt,str) or not prompt.strip() or len(prompt)>MAX_PROMPT_CHARS or '\0' in prompt:
             raise ValueError('Enter a valid description before enhancing the prompt.')
         if not isinstance(editing,bool):raise ValueError('Invalid request type.')
-        if not isinstance(mode, str) or mode not in (*ENHANCER_MODES, 'corrector'):
+        if not isinstance(mode, str) or mode not in ENHANCER_MODES:
             raise ValueError('Choose Simple, More details, Creative, or Dramatic.')
         if not self.request_lock.acquire(blocking=False):raise RuntimeError('A prompt is already being enhanced.')
         try:
@@ -264,13 +262,6 @@ class PromptEnhancer:
                 self.request_cancel.clear()
                 self.busy=True
             if self.stop_event.is_set():raise RuntimeError('The prompt enhancer is shutting down.')
-            options = dict(self.options)
-            if not (options['corrector'] or options['enhancer']):
-                raise ValueError('Enable Corrector or Enhancer in Settings first.')
-            if not options['enhancer'] and mode != 'corrector':
-                raise ValueError('Enhancer is disabled. Use Correct prompt instead.')
-            if mode == 'corrector' and (not options['corrector'] or options['enhancer']):
-                raise ValueError('Correct prompt is only available when Corrector alone is enabled.')
             yield {'state':'started'}
             if self.status()['state']!='ready':
                 self.start()
@@ -289,43 +280,35 @@ class PromptEnhancer:
                     self.request_cancel.wait(.1)
             self._check_cancel()
             started=time.monotonic()
-            corrected = prompt.strip()
-            if options['corrector']:
-                # Stage 1 (optional): the corrector
-                # resolves its meaning and returns a plain en-US paragraph.
-                correction_instruction = (
-                    'Interpret, correct, and translate this reference-image edit into en-US:'
-                    if editing else
-                    'Interpret, correct, and translate this image description into en-US:'
-                )
-                yield {'stage': 'corrector'}
-                corrected = yield from self._complete(
-                    self.corrector_system,
-                    f'{correction_instruction}\n\n{prompt.strip()}',
-                    CORRECTOR_TEMPERATURE,
-                    phase='corrector', reasoning_budget=self.corrector_budget,
-                )
-            enhanced = corrected
-            if options['enhancer']:
-                # Same loaded model, new independent request. Only the corrected
-                # paragraph (or original input when disabled) is passed to the mode; no history.
-                self._check_cancel()
-                yield {'state':'working'}
-                self._check_cancel()
-                instruction = ('Rewrite this image edit as an English instruction:' if editing else
-                               'Rewrite this image description as an English prompt:')
-                _, temperature, mode_instruction = ENHANCER_MODES[mode]
-                user_message = f'{instruction}\n\n{corrected}'
-                if mode_instruction:
-                    if editing:
-                        mode_instruction += ' Enrich only the requested change. Preserving the scope of the edit takes priority over adding detail.'
-                        opening = 'Start directly with the requested change.'
-                    else:
-                        opening = 'Start directly with the main subject.'
-                    user_message += (f'\n\n{mode_instruction} Show the same subjects, actions, and place in the same moment. '
-                                     f'Write only the finished English paragraph. {opening}')
-                yield {'stage': 'enhancer'}
-                enhanced = yield from self._complete(self.systems[mode], user_message, temperature, phase='enhancer', reasoning_budget=self.enhancer_budget)
+            correction_instruction = (
+                'Interpret, correct, and translate this reference-image edit into en-US:'
+                if editing else
+                'Interpret, correct, and translate this image description into en-US:'
+            )
+            yield {'stage': 'corrector'}
+            corrected = yield from self._complete(
+                self.corrector_system,
+                f'{correction_instruction}\n\n{prompt.strip()}',
+                CORRECTOR_TEMPERATURE,
+                phase='corrector', reasoning_budget=self.corrector_budget,
+            )
+            self._check_cancel()
+            yield {'state':'working'}
+            self._check_cancel()
+            instruction = ('Rewrite this image edit as an English instruction:' if editing else
+                           'Rewrite this image description as an English prompt:')
+            _, temperature, mode_instruction = ENHANCER_MODES[mode]
+            user_message = f'{instruction}\n\n{corrected}'
+            if mode_instruction:
+                if editing:
+                    mode_instruction += ' Enrich only the requested change. Preserving the scope of the edit takes priority over adding detail.'
+                    opening = 'Start directly with the requested change.'
+                else:
+                    opening = 'Start directly with the main subject.'
+                user_message += (f'\n\n{mode_instruction} Show the same subjects, actions, and place in the same moment. '
+                                 f'Write only the finished English paragraph. {opening}')
+            yield {'stage': 'enhancer'}
+            enhanced = yield from self._complete(self.systems[mode], user_message, temperature, phase='enhancer', reasoning_budget=self.enhancer_budget)
             self._check_cancel()
             # Release VRAM before committing the complete result to the input.
             # Stage deltas are displayed separately and never replace the input.

@@ -246,12 +246,12 @@ function acceptProcessingSettings(options){
 }
 function allowedPromptMode(mode){
   if(!processingSupported)return false;
-  return processingSettings.enhancer?['simple','detailed','creative','cinematic'].includes(mode):processingSettings.corrector&&mode==='corrector';
+  return ['simple','detailed','creative','cinematic'].includes(mode);
 }
 function processingDraft(){return Object.fromEntries(Object.entries(processingInputs).map(([key,input])=>[key,Boolean(input.checked)]));}
 function refreshProcessingSummary(){
   const draft=processingDraft();
-  processingSummary.textContent=!draft.corrector&&!draft.enhancer?'Off':draft.lite?'Lite':'Normal';
+  processingSummary.textContent=draft.lite?'Lite':'Normal';
 }
 function fillProcessingSettings(options){
   const values={...processingDefaults,...options};
@@ -482,7 +482,7 @@ async function request(path, options) {
 }
 
 function canImprovePrompt() {
-  return !busy && processingSupported && (processingSettings.corrector||processingSettings.enhancer) && ['ready','error','stopped'].includes(enhancerState.state) && !enhancerState.busy && !!prompt.value.trim();
+  return !busy && processingSupported && ['ready','error','stopped'].includes(enhancerState.state) && !enhancerState.busy && !!prompt.value.trim();
 }
 
 function setBusy(value = running) {
@@ -518,19 +518,18 @@ function setBusy(value = running) {
   cancelGeneration.disabled = stopping;
   stage.classList.toggle('busy', busy);
   form.setAttribute('aria-busy', String(busy));
-  enhanceControl.hidden = busy || ((!processingSupported||!processingSettings.corrector&&!processingSettings.enhancer)&&undoPrompt===null);
+  enhanceControl.hidden = busy || (!processingSupported&&undoPrompt===null);
   const canImprove = canImprovePrompt();
   const canUndo = !busy && undoPrompt !== null;
   undoEnhance.hidden = !canUndo;
   undoEnhance.disabled = !canUndo;
   for(const option of enhanceOptions.querySelectorAll('button[data-mode]')){
-    option.hidden=!processingSupported||!processingSettings.enhancer;
+    option.hidden=!processingSupported;
     option.disabled=!canImprove||option.hidden;
   }
   enhancePrompt.disabled = !canImprove && !canUndo;
-  if(enhancePrompt.disabled||(!processingSettings.enhancer&&!canUndo))setEnhanceOptions(false);
-  const correctOnly=allowedPromptMode('corrector');
-  const action=!canImprove&&canUndo?'Undo prompt enhancement':correctOnly?'Correct prompt':'Enhance prompt';
+  if(enhancePrompt.disabled)setEnhanceOptions(false);
+  const action=!canImprove&&canUndo?'Undo prompt enhancement':'Enhance prompt';
   enhancePrompt.title=action;
   enhancePrompt.setAttribute('aria-label',action);
   enhancePrompt.classList.toggle('enhancing',enhancing);
@@ -539,7 +538,7 @@ function setBusy(value = running) {
 }
 
 function setEnhanceOptions(open) {
-  const visible = open && !enhancePrompt.disabled && ((processingSupported && processingSettings.enhancer && canImprovePrompt()) || !undoEnhance.hidden);
+  const visible = open && !enhancePrompt.disabled && ((processingSupported && canImprovePrompt()) || !undoEnhance.hidden);
   enhanceOptions.hidden = !visible;
   enhancePrompt.setAttribute('aria-expanded', String(visible));
 }
@@ -564,10 +563,6 @@ document.addEventListener('pointerdown', event => {
 });
 enhancePrompt.addEventListener('click', () => {
   if (enhancePrompt.disabled) return;
-  if (allowedPromptMode('corrector') && canImprovePrompt()) {
-    setEnhanceOptions(false);
-    return improvePrompt('corrector');
-  }
   setEnhanceOptions(true);
   if (!enhanceOptions.hidden) enhanceOptions.querySelector('button:not([hidden]):not(:disabled)')?.focus();
 });
@@ -733,7 +728,7 @@ function setMascotPhase(phase){
   mascot.dataset.corrector=phase==='corrector'?'active':'idle';
   mascot.dataset.enhancer=phase==='enhancer'?'active':'idle';
   for(const [key,el] of Object.entries(thoughtSections)){
-    el.querySelector('.thought-state').textContent=key===phase?'Processing':phase==='enhancer'&&key==='corrector'&&processingSettings.corrector?'Done':'Waiting';
+    el.querySelector('.thought-state').textContent=key===phase?'Processing':phase==='enhancer'&&key==='corrector'?'Done':'Waiting';
   }
   if(phase!==thoughtPhase){
     const previous=thoughtPhase;
@@ -762,7 +757,7 @@ async function improvePrompt(mode) {
   undoPrompt=null;undoEnhance.hidden=true;
   promptNotice=null;
   enhancing=true;enhanceController=new AbortController();setBusy();updateMascot();
-  status.textContent=processingSettings.corrector?'Correcting prompt…':'Enhancing prompt…';resetThoughts();setMascotPhase(processingSettings.corrector?'corrector':'enhancer');stage.classList.remove('error');
+  status.textContent='Correcting prompt…';resetThoughts();setMascotPhase('corrector');stage.classList.remove('error');
   try {
     const response=await fetch('/api/enhance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:original,editing:references.length>0,mode}),signal:enhanceController.signal});
     if(!response.ok) {const error=await response.json();throw new Error(error.error || 'Could not enhance the prompt.');}
@@ -789,7 +784,7 @@ async function improvePrompt(mode) {
     }
     if(!done || !text.trim())throw new Error('Prompt enhancement was interrupted. The original text was restored.');
     prompt.value=text.trim();undoPrompt=original;success=true;
-    showPromptNotice(`Prompt ${processingSettings.enhancer?'enhanced':'corrected'} · ${seconds.toLocaleString('en-US')}s`);
+    showPromptNotice(`Prompt enhanced · ${seconds.toLocaleString('en-US')}s`);
   } catch(error) {
     enhanceController.abort();prompt.value=original;undoPrompt=originalUndo;
     showPromptNotice(error.name==='AbortError'?'Enhancement canceled · Original text restored':error.message);
