@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Fetch and compile only project-local enhancer files; never installs packages."""
+import argparse
 import hashlib
 import json
 import os
@@ -22,14 +23,16 @@ def verified(path,expected):
     return True
 
 
-def main():
-    config=json.loads((ROOT/'prompt-enhancer.json').read_text())
+def prepare_model(config):
     model=config['model'];folder=ROOT/model['directory'];folder.mkdir(parents=True,exist_ok=True)
     target=folder/model['filename']
     if not verified(target,model['sha256']):fetch(model['url'],target,model['sha256'],expected_size=model['size'],resume=True)
     if target.stat().st_size!=model['size']:raise ValueError('Tamanho incorreto do modelo.')
-    if model.get('license_url'):
+    if model.get('license_url') and not (folder/model.get('license_filename','LICENSE')).is_file():
         with urlopen(model['license_url'],timeout=30) as response:(folder/model.get('license_filename', 'LICENSE')).write_bytes(response.read())
+
+
+def build_backend(config):
     backend=config['backend'];destination=ROOT/backend['directory']
     cmake=ROOT/'tools/cmake-4.5.0-linux-x86_64/bin/cmake'
     if not cmake.is_file():raise RuntimeError('CMake local ausente. Prepare as ferramentas de compilação do projeto.')
@@ -40,13 +43,14 @@ def main():
         build=tmp/'build'
         flags=['-DCMAKE_BUILD_TYPE=Release','-DGGML_NATIVE=OFF','-DGGML_AVX2=ON',
                '-DGGML_AVX512=OFF','-DGGML_FMA=ON','-DGGML_F16C=ON','-DGGML_BACKEND_DL=OFF',
+               '-DCMAKE_C_FLAGS=-march=x86-64-v3',
                '-DGGML_VULKAN=ON','-DGGML_CUDA=OFF','-DGGML_BLAS=OFF','-DLLAMA_OPENSSL=OFF',
                '-DLLAMA_BUILD_TESTS=OFF','-DLLAMA_BUILD_EXAMPLES=OFF','-DLLAMA_BUILD_TOOLS=ON',
                '-DLLAMA_BUILD_SERVER=ON','-DLLAMA_BUILD_APP=OFF','-DLLAMA_BUILD_UI=OFF',
                '-DLLAMA_USE_PREBUILT_UI=OFF','-DCMAKE_BUILD_RPATH_USE_ORIGIN=ON',
                '-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON','-DCMAKE_INSTALL_RPATH=$ORIGIN',
                f'-DCMAKE_PREFIX_PATH={ROOT / "tools/local/prefix"}',
-               f'-DCMAKE_CXX_FLAGS=-isystem {ROOT / "tools/local/prefix/include"}',
+               f'-DCMAKE_CXX_FLAGS=-march=x86-64-v3 -isystem {ROOT / "tools/local/prefix/include"}',
                f'-DVulkan_INCLUDE_DIR={ROOT / "tools/local/Vulkan-Headers-1.4.363/include"}']
         subprocess.run([str(cmake),'-S',str(source),'-B',str(build),'-G','Ninja',*flags],check=True)
         subprocess.run([str(cmake),'--build',str(build),'--target','llama-server','--parallel',os.environ.get('BUILD_JOBS','4')],check=True)
@@ -67,7 +71,17 @@ def main():
                 if path.is_file() and path.name.upper().startswith(('LICENSE','COPYING')) and path.stat().st_size<120000:
                     notices.append(str(path.relative_to(source))+'\n\n'+path.read_text(errors='replace'))
         (destination/'THIRD_PARTY_LICENSES.txt').write_text('\n\n'.join(notices))
-    print('Melhorador pronto dentro do projeto. Inicie o app com ./start.sh.')
+    print('llama-server compiled with Vulkan.')
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    modes=parser.add_mutually_exclusive_group(required=True)
+    modes.add_argument('--model-only',action='store_true')
+    modes.add_argument('--backend-only',action='store_true')
+    args=parser.parse_args()
+    config=json.loads((ROOT/'prompt-enhancer.json').read_text())
+    if args.model_only:prepare_model(config)
+    else:build_backend(config)
 
 
 if __name__=='__main__':main()

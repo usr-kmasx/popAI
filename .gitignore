@@ -29,3 +29,6 @@ prototypes/.integrated-*/
 prototypes/.test-browser-*/
 prototypes/.test-sketch-server.pid
 prototypes/.test-sketch-server.log
+
+# Generated binary distribution artifacts
+/dist/

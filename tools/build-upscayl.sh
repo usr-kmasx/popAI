@@ -24,7 +24,7 @@ git -C "$work/src" apply "$root/patches/upscayl-final-png.patch"
 cmake="$root/tools/cmake-4.5.0-linux-x86_64/bin/cmake"
 if [[ ! -x "$cmake" ]]; then cmake=cmake; fi
 headers="$root/tools/local/Vulkan-Headers-1.4.363/include"
-options=(-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DNCNN_AVX512=OFF)
+options=(-DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DNCNN_AVX512=OFF -DNCNN_RUNTIME_CPU=ON -DCMAKE_C_FLAGS=-march=x86-64-v3 -DCMAKE_CXX_FLAGS=-march=x86-64-v3)
 if [[ -f "$headers/vulkan/vulkan.h" ]]; then options+=("-DVulkan_INCLUDE_DIR=$headers"); fi
 "$cmake" -S "$work/src/src" -B "$work/build" -G Ninja "${options[@]}"
 "$cmake" --build "$work/build" --target upscayl-bin --parallel "${BUILD_JOBS:-4}"
@@ -35,3 +35,14 @@ install -s -m 755 "$work/build/upscayl-bin" "$staging"
 help_text="$("$staging" -h 2>&1 || true)"
 [[ "$help_text" == *"  -2 "* ]]
 mv -f -- "$staging" "$runner_dir/upscayl-chain"
+python3 - "$work/src" "$runner_dir/CHAIN_LICENSES.txt" <<'LICENSES'
+from pathlib import Path
+import sys
+source=Path(sys.argv[1])
+notices=[]
+for path in sorted(source.rglob('*')):
+    if path.is_file() and not path.is_symlink() and path.name.upper().startswith(('LICENSE','COPYING','NOTICE')) and path.stat().st_size<250000:
+        notices.append(str(path.relative_to(source))+'\n\n'+path.read_text(errors='replace'))
+if not notices:raise SystemExit('Missing upscayl/NCNN license notices')
+Path(sys.argv[2]).write_text('\n\n'.join(notices))
+LICENSES

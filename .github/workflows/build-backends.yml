@@ -1,0 +1,59 @@
+name: Build Vulkan backends
+on:
+  push:
+    branches: [build/precompiled-backends]
+    paths:
+      - 'tools/build-backends.sh'
+      - 'tools/package-backends.py'
+      - 'tools/setup-prompt-enhancer.py'
+      - 'tools/build-upscayl.sh'
+      - 'build.sh'
+      - 'sources.json'
+      - 'prompt-enhancer.json'
+      - 'patches/**'
+      - 'native/**'
+      - '.github/workflows/build-backends.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      BUILD_JOBS: '4'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build-only dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git python3 ninja-build glslc pkg-config patch unzip curl ca-certificates libvulkan1 libvulkan-dev vulkan-tools libpng-dev libomp-dev patchelf binutils
+      - name: Build all pinned native components (no enhancer model download)
+        run: ./tools/build-backends.sh
+      - name: Assemble relocatable archive
+        run: python3 tools/package-backends.py
+      - name: Smoke-test extracted bundle
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          tar -xzf dist/popai-backends-linux-x86_64-v3.tar.gz -C "$tmp"
+          cd "$tmp/backends"
+          stable-diffusion.cpp/build/bin/sd-cli --version
+          stable-diffusion.cpp/build/bin/sd-server --help > /dev/null
+          llama-vulkan/llama-server --version
+          help_text="$(upscayl-ncnn/upscayl-chain -h 2>&1 || true)"
+          [[ "$help_text" == *"  -2 "* && "$help_text" == *"  -P "* ]]
+          for binary in stable-diffusion.cpp/build/bin/sd-cli stable-diffusion.cpp/build/bin/sd-server llama-vulkan/llama-server upscayl-ncnn/upscayl-bin upscayl-ncnn/upscayl-chain process-guard vulkan-probe; do
+            [[ -x "$binary" ]]
+            ! ldd "$binary" | grep 'not found'
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: popai-backends-linux-x86_64-v3
+          path: |
+            dist/popai-backends-linux-x86_64-v3.tar.gz
+            dist/backend-bundle.json
+          if-no-files-found: error
+          compression-level: 0

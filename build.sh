@@ -14,9 +14,10 @@ fi
   -DSPIRV_HEADERS_ENABLE_TESTS=OFF -DCMAKE_INSTALL_PREFIX="$PREFIX"
 "$CMAKE" --install "$ROOT/tools/local/spirv-build"
 "$CMAKE" -S "$ROOT/backends/stable-diffusion.cpp" -B "$ROOT/backends/stable-diffusion.cpp/build" -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release -DSD_VULKAN=ON -DSD_WEBP=OFF -DSD_WEBM=OFF \
+  -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_AVX512=OFF \
+  -DGGML_FMA=ON -DGGML_F16C=ON -DCMAKE_C_FLAGS="-march=x86-64-v3" -DSD_VULKAN=ON -DSD_WEBP=OFF -DSD_WEBM=OFF \
   -DSD_SERVER_BUILD_FRONTEND=OFF -DCMAKE_PREFIX_PATH="$PREFIX" \
-  -DCMAKE_CXX_FLAGS="-isystem $PREFIX/include" \
+  -DCMAKE_CXX_FLAGS="-march=x86-64-v3 -isystem $PREFIX/include" \
   -DVulkan_INCLUDE_DIR="$ROOT/tools/local/Vulkan-Headers-1.4.363/include"
 "$CMAKE" --build "$ROOT/backends/stable-diffusion.cpp/build" --target sd-cli sd-server --parallel "${BUILD_JOBS:-4}"
 "$ROOT/backends/stable-diffusion.cpp/build/bin/sd-cli" --version
