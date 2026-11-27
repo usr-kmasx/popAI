@@ -28,17 +28,32 @@ jobs:
       - name: Install build-only dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git python3 ninja-build glslc pkg-config patch unzip curl ca-certificates libvulkan1 libvulkan-dev vulkan-tools libpng-dev libomp-dev patchelf binutils
+          sudo apt-get install -y build-essential git python3 ninja-build glslc glslang-tools pkg-config patch unzip curl ca-certificates libvulkan1 libvulkan-dev vulkan-tools libpng-dev libomp-dev patchelf binutils python3-pil
+          command -v glslangValidator
+          glslangValidator --version
       - name: Build all pinned native components (no enhancer model download)
         run: ./tools/build-backends.sh
       - name: Assemble relocatable archive
         run: python3 tools/package-backends.py
-      - name: Smoke-test extracted bundle
+      - name: Verify archive with the actual installer and run regressions
         run: |
           set -euo pipefail
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
-          tar -xzf dist/popai-backends-linux-x86_64-v3.tar.gz -C "$tmp"
+          export BUNDLE_STAGE="$tmp"
+          python3 - <<'PYINSTALL'
+          import importlib.util, json, os, sys
+          from pathlib import Path
+          root=Path.cwd()
+          sys.path.insert(0,str(root/'tools'))
+          spec=importlib.util.spec_from_file_location('installer',root/'tools/install-backends.py')
+          mod=importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          record=json.loads((root/'dist/backend-bundle.json').read_text())
+          destination=mod.extract_archive(root/'dist'/record['archive'],Path(os.environ['BUNDLE_STAGE']),root,record)
+          mod.verify_tree(destination,root,record)
+          print('Archive accepted by the actual runtime installer.')
+          PYINSTALL
           cd "$tmp/backends"
           stable-diffusion.cpp/build/bin/sd-cli --version
           stable-diffusion.cpp/build/bin/sd-server --help > /dev/null
@@ -47,8 +62,16 @@ jobs:
           [[ "$help_text" == *"  -2 "* && "$help_text" == *"  -P "* ]]
           for binary in stable-diffusion.cpp/build/bin/sd-cli stable-diffusion.cpp/build/bin/sd-server llama-vulkan/llama-server upscayl-ncnn/upscayl-bin upscayl-ncnn/upscayl-chain process-guard vulkan-probe; do
             [[ -x "$binary" ]]
-            ! ldd "$binary" | grep 'not found'
+            linked="$(ldd "$binary" 2>&1)" || [[ "$linked" == *"not a dynamic executable"* || "$linked" == *"statically linked"* ]]
+            [[ "$linked" != *"not found"* ]]
           done
+          cd "$GITHUB_WORKSPACE"
+          mv backends "$tmp/build-tree"
+          mv "$tmp/backends" backends
+          for test in test_backend.py test_fetch.py test_prompt_enhancer.py test_install_backends.py; do
+            /usr/bin/python3 -m unittest discover -s tests -p "$test"
+          done
+          node --test tests/frontend.test.cjs tests/eyes.test.cjs
       - uses: actions/upload-artifact@v4
         with:
           name: popai-backends-linux-x86_64-v3

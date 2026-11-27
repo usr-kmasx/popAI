@@ -66,18 +66,24 @@ def main():
             (stage/area/'THIRD_PARTY_LICENSES.txt').parent.mkdir(parents=True,exist_ok=True)
             (stage/area/'THIRD_PARTY_LICENSES.txt').write_text('\n\n'.join(notices))
         copy('POPAI_LICENSE',ROOT/'LICENSE')
-        for file in stage.rglob('*'):
+        elf_files=[]
+        for file in sorted(stage.rglob('*')):
             if not file.is_file():continue
             with file.open('rb') as f:elf=f.read(4)==b'\x7fELF'
             if not elf:continue
+            elf_files.append(file)
             # Keep the official upscaler byte-for-byte identical to its pinned asset.
             if file!=stage/'upscayl-ncnn/upscayl-bin':
                 dynamic=subprocess.run(['readelf','-d',str(file)],capture_output=True,text=True,check=True).stdout
                 if '(NEEDED)' in dynamic:
                     subprocess.run(['patchelf','--set-rpath','$ORIGIN',str(file)],check=True)
+        # Set every library's search path before resolving transitive dependencies.
+        for file in elf_files:
             linked=subprocess.run(['ldd',str(file)],capture_output=True,text=True)
             print(str(file.relative_to(stage)),linked.stdout,linked.stderr,flush=True)
-            if 'not found' in linked.stdout+linked.stderr:raise RuntimeError(f'Missing library: {file}')
+            output=linked.stdout+linked.stderr
+            if 'not found' in output or (linked.returncode and not any(text in output for text in ('not a dynamic executable','statically linked'))):
+                raise RuntimeError(f'Missing or invalid library: {file}')
             # Reject accidental dependencies on the build tree.
             if str(ROOT) in linked.stdout or str(ROOT) in linked.stderr:raise RuntimeError(f'Non-relocatable dependency: {file}')
             symbols=subprocess.run(['readelf','--version-info',str(file)],capture_output=True,text=True,check=True).stdout
@@ -93,6 +99,7 @@ def main():
             f.add(stage,arcname='backends')
         record={'format':1,'archive':NAME,'size':archive.stat().st_size,'sha256':sha(archive),
                 'platform':manifest['platform'],'glibc_min':manifest['glibc_min'],
+                'manifest_sha256':sha(stage/'bundle-manifest.json'),
                 'source_sha256':manifest['source_sha256']}
         (out/'backend-bundle.json').write_text(json.dumps(record,indent=2)+'\n')
         print(json.dumps(record,indent=2))

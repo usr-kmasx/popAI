@@ -41,12 +41,17 @@ browser and runs inference on your computer.
 
 ## Getting started
 
-The popAI installer prepares the Linux x86-64 runtime, Vulkan image-generation
-engine, Real-ESRGAN upscaler, and on-demand prompt enhancer with **one command**.
-It works on Arch Linux, Debian and Ubuntu with a Vulkan-capable GPU and a
-working GPU driver. It installs missing system build packages with sudo only
-when needed; all compiled application binaries and Python packages stay under
-the popAI project. Internet access and free disk space are required.
+The popAI installer downloads a pinned precompiled Vulkan backend bundle,
+creates the private Python environment using a Pillow wheel, and downloads
+the prompt-enhancer model. It does not compile native code, download build
+toolchains or clone engine sources.
+
+The package targets Linux x86-64-v3 (AVX2/FMA/BMI2), glibc 2.39 or later, Python
+3.12 or later and an installed Vulkan-capable GPU driver. The baseline build
+environment is Ubuntu 24.04. Arch Linux and newer Debian/Ubuntu releases
+meeting these requirements are intended targets; cross-distribution support
+requires runtime validation. The installer may request sudo only for missing
+system runtime packages.
 
 Clone the current repository and run the installer **as your normal user**:
 
@@ -56,12 +61,18 @@ cd popAI
 ./install.sh
 ```
 
-The installer fetches pinned build tools, verifies download hashes, builds the
-local Vulkan engines and upscaler, installs Pillow in a private Python virtual
-environment, and downloads/builds the prompt enhancer (including its 4.48 GB
-local Qwen model). It deletes only the disposable build-download archives
-after successful verification. It does **not** delete your saved projects,
-configurations, images or image-model weights.
+The installer checks the size and SHA-256 of the native archive and the
+pinned manifest, verifies every extracted file, and publishes the complete
+backend directory only after validation. The seven executables, shared
+libraries, Real-ESRGAN weights and license notices are included. The
+4.48 GB prompt-enhancer model is still downloaded separately and verified.
+No saved project, configuration, downloaded image or image-model weight is
+deleted. The verified disposable archive is removed after installation.
+
+An existing backend directory from an older installation is preserved rather
+than overwritten. If the installer reports an incompatible directory, move
+that directory aside before running the new installer. A verified existing
+bundle is reused without downloading it again.
 
 When installation finishes, launch the app:
 
@@ -85,8 +96,8 @@ To verify a completed installation without downloading or modifying anything:
 ./install.sh --check
 ```
 
-Rerun `./install.sh` to repair/rebuild missing parts. It reuses existing
-verified files and never downloads image-model weights. Hardware-specific GPU
+Rerun `./install.sh` to reuse verified installed files and resume missing
+downloads. It never downloads image-model weights or compiles code. Hardware-specific GPU
 drivers and an accessible Vulkan device remain prerequisites; an incompatible
 GPU or unavailable upstream download cannot be fixed automatically.
 
@@ -219,24 +230,18 @@ directory until its normal cleanup.
 
 ## Installation and development notes
 
-`./install.sh` replaces the previous manual multi-command build procedure.
-It prepares the pinned dependencies defined in
-[`sources.json`](sources.json) and
-[`prompt-enhancer.json`](prompt-enhancer.json), applies the project patches,
-and invokes `./build.sh` and `tools/setup-prompt-enhancer.py` as needed.
-These are internal build helpers, **not** additional commands that a new user
-must run.
+The normal installer requires no compiler, CMake, Ninja, development headers
+or Git source checkouts. See [native backend distribution](docs/backend-distribution.md)
+for the artifact format, build environment, and developer-only build procedure.
+The GitHub Actions workflow builds the original pinned engine revisions and
+patches from [sources.json](sources.json) and [prompt-enhancer.json](prompt-enhancer.json).
+It assembles a relocatable native archive and checks executable dependencies.
+The source build scripts remain developer tools, not steps in end-user installation.
 
-The model browser uses [`model-downloads.json`](model-downloads.json) for its
-independently verified image-model downloads. Presets reuse each model's
-weights. Source revisions, manifests, patches and license notices are kept so
-future reinstallations remain reproducible. Disposable downloaded ZIP/tar
-archives are discarded after successful installation; native build sources and
-binaries remain locally for repair and incremental compilation.
-
-On systems with an unsupported distribution or a missing Vulkan driver,
-the script reports the prerequisite instead of claiming a successful setup.
-The supported installer targets are Arch Linux, Debian and Ubuntu on x86-64.
+The model browser uses [model-downloads.json](model-downloads.json) for its
+independently verified image-model downloads. Presets reuse the same weights.
+The compiled package is not a replacement for the image-model or prompt-model
+downloads.
 
 ## Tests
 
